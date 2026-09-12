@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
-from .core import EXPECTED_STOCKS if False else IST
+from .core import IST, MARKET_END
 from .cp5 import CP5ContinuousEngine, CP5Cycle
 from .cp6 import CP6OutputSystem, CP6Snapshot
 
@@ -29,10 +29,10 @@ class CP7IntegrationEngine:
     state/monitoring, and CP6 renders operator output. CP7 composes those
     layers without changing strategy mathematics or signal rules.
 
-    CP7 deliberately owns the *application-level* one-minute presentation
-    loop: each iteration executes exactly one CP5 cycle and one CP6 snapshot.
-    CP5 remains the source of truth for cycle scheduling semantics, while CP7
-    prevents a second strategy loop from being introduced.
+    CP7 owns the application-level one-minute presentation loop: each
+    iteration executes exactly one CP5 cycle and one CP6 snapshot. CP5 remains
+    the source of truth for strategy/runtime state; CP7 is the composition and
+    lifecycle boundary used by the canonical launcher.
     """
 
     def __init__(
@@ -90,13 +90,7 @@ class CP7IntegrationEngine:
     async def cycle_once(self, now: datetime | None = None) -> CP7Cycle:
         ts = (now or datetime.now(IST)).astimezone(IST)
         errors: list[str] = []
-        try:
-            cp5_cycle = await self.engine.cycle_once(now=ts)
-        except Exception as exc:
-            errors.append(f"cp5_cycle:{type(exc).__name__}:{exc}")
-            self.integration_errors.extend(errors)
-            raise
-
+        cp5_cycle = await self.engine.cycle_once(now=ts)
         errors.extend(self._validate_cycle(cp5_cycle))
 
         try:
@@ -122,17 +116,13 @@ class CP7IntegrationEngine:
         return self.output.render(self.last_cycle.cp5_cycle, clear=clear)
 
     async def run_forever(self) -> None:
-        """Run one CP5 cycle per minute and render its CP6 output.
-
-        There is intentionally one scheduling loop here. CP7 does not call
-        CP6.run(), and therefore cannot create a second competing loop.
-        """
+        """Run the canonical one-minute CP5→CP6 application loop."""
         self.running = True
         self.engine.running = True
         try:
             while self.running and self.engine.running:
                 now = datetime.now(IST)
-                if now.time() > datetime.strptime("15:15", "%H:%M").time():
+                if now.time() > MARKET_END:
                     break
                 try:
                     cycle = await self.cycle_once(now=now)
