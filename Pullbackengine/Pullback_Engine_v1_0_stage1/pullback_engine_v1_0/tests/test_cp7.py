@@ -55,6 +55,13 @@ def make_cycle():
         {
             "timestamp": ts,
             "universe": 450,
+            "currently_calculable": 1,
+            "temporarily_skipped": 449,
+            "developing": 0,
+            "qualified": 0,
+            "armed": 0,
+            "new_signals": 0,
+            "hunter_status": "RUNNING",
             "funnel": FunnelCounts(450, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0),
         },
     )()
