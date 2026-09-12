@@ -20,15 +20,5 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Diagnose CP4 short early-entry
-        run: |
-          python - <<'PY'
-          from tests.test_cp4 import make_candidate, make_5m_candles
-          from pullback_engine.cp4 import calculate_early_entry_from_5m
-          c = make_candidate("SHORT")
-          candles = make_5m_candles()
-          print("SHORT candidate:", c.direction, c.impulse, c.pullback)
-          print("SHORT early-entry:", calculate_early_entry_from_5m(c, candles, candles[30].close))
-          PY
-      - name: Run CP2-CP6 tests
-        run: python -m pytest -q tests/test_cp2.py tests/test_cp3.py tests/test_cp4.py tests/test_cp5.py tests/test_cp6.py
+      - name: Run full test suite
+        run: python -m pytest -q tests
