@@ -1,4 +1,4 @@
-name: CP2-CP6 Tests
+name: CP2-CP8 Tests
 
 on:
   push:
@@ -26,3 +26,7 @@ jobs:
         run: |
           python -m py_compile pullback_engine/cp7.py run_cp7.py
           python run_cp7.py
+      - name: Compile and run CP8 final audit
+        run: |
+          python -m py_compile pullback_engine/cp8.py run_cp8.py
+          python run_cp8.py
