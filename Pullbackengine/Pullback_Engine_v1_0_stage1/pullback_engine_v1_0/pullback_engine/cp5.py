@@ -1,0 +1,1372 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import threading
+from dataclasses import asdict, dataclass
+from datetime import datetime, time, timedelta
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+from .core import MARKET_END, HUNT_START, IST, aggregate_5m, ema
+from .cp2 import CP2Cycle, CP2DataEngine, StockData
+from .cp4 import (
+    CP4Cycle,
+    CP4TriggerEngine,
+    Signal,
+    calculate_early_entry_from_5m,
+    completed_1m_index,
+    long_reacceleration,
+    short_reacceleration,
+)
+from .core import nifty_regime
+
+
+@dataclass
+class MonitoringState:
+    setup_id: str
+    symbol: str
+    direction: str
+    signal_timestamp: datetime
+    entry_price: float
+    status: str = "TREND_VALID_AT_TRIGGER"
+    invalidation_consecutive: int = 0
+    last_evaluated_5m: datetime | None = None
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class FunnelCounts:
+    universe: int
+    price_eligible: int
+    valid_data: int
+    regime: int
+    impulse: int
+    pullback: int
+    structure: int
+    trend: int
+    early_entry: int
+    reacceleration: int
+    signals: int
+
+
+@dataclass(frozen=True)
+class CycleReport:
+    timestamp: datetime
+    universe: int
+    currently_calculable: int
+    temporarily_skipped: int
+    developing: int
+    qualified: int
+    armed: int
+    new_signals: int
+    hunter_status: str
+    funnel: FunnelCounts
+
+
+@dataclass
+class CP5Cycle:
+    timestamp: datetime
+    cp2_cycle: CP2Cycle
+    stock_results: dict[str, Any]
+    candidates: list[Any]
+    new_signals: list[Signal]
+    monitoring: dict[str, MonitoringState]
+    report: CycleReport | None
+    errors: list[str]
+
+
+class CP5ContinuousEngine:
+    """CP5 continuous runtime, concurrent stock scheduling and live monitoring.
+
+    CP1-CP4 remain the strategy implementation. CP5 owns runtime concerns:
+    continuous one-minute scheduling, independent stock workers, alert-once
+    delivery, monitoring, diagnostics and independent 15-minute reporting.
+    """
+
+    def __init__(
+        self,
+        data_engine: CP2DataEngine | None = None,
+        state_path: str | Path = "pullback_state.json",
+        worker_limit: int = 450,
+        alert_callback: Callable[[Signal], None] | None = None,
+    ) -> None:
+        self.data_engine = data_engine or CP2DataEngine()
+        self.state_path = Path(state_path)
+        self.worker_limit = max(1, min(int(worker_limit), 450))
+        self.alert_callback = alert_callback or self._default_alert
+        self.running = True
+        self.worker_engines: dict[str, CP4TriggerEngine] = {}
+        self.monitoring: dict[str, MonitoringState] = {}
+        self.alerted_setup_ids: set[str] = set()
+        self.last_cycle: CP5Cycle | None = None
+        self.last_report_slot: datetime | None = None
+        self.runtime_errors: list[str] = []
+        self._state_lock = threading.Lock()
+        self._load_state()
+
+    @staticmethod
+    def _default_alert(signal: Signal) -> None:
+        try:
+            print("\a", end="", flush=True)
+        except Exception:
+            pass
+
+        print(
+            f"ALERT | {signal.symbol} | {signal.direction} | "
+            f"{signal.signal_timestamp.astimezone(IST):%Y-%m-%d %H:%M:%S IST} | "
+            f"ENTRY ₹{signal.entry_price:.2f} | "
+            f"{signal.trend_invalidation_status} | {signal.setup_id}",
+            flush=True,
+        )
+
+    @staticmethod
+    def _serialize_datetime(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    def _load_state(self) -> None:
+        if not self.state_path.exists():
+            return
+
+        try:
+            raw = json.loads(
+                self.state_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            if not isinstance(raw, dict):
+                return
+
+            alerted = raw.get(
+                "alerted_setup_ids",
+                [],
+            )
+
+            if isinstance(alerted, list):
+                self.alerted_setup_ids = {
+                    str(x)
+                    for x in alerted
+                }
+
+            rows = raw.get(
+                "monitoring",
+                {},
+            )
+
+            if isinstance(rows, dict):
+                for setup_id, item in rows.items():
+                    if not isinstance(item, dict):
+                        continue
+
+                    try:
+                        self.monitoring[str(setup_id)] = MonitoringState(
+                            setup_id=str(
+                                item["setup_id"]
+                            ),
+                            symbol=str(
+                                item["symbol"]
+                            ),
+                            direction=str(
+                                item["direction"]
+                            ),
+                            signal_timestamp=(
+                                datetime.fromisoformat(
+                                    item["signal_timestamp"]
+                                ).astimezone(IST)
+                            ),
+                            entry_price=float(
+                                item["entry_price"]
+                            ),
+                            status=str(
+                                item.get(
+                                    "status",
+                                    "TREND_VALID_AT_TRIGGER",
+                                )
+                            ),
+                            invalidation_consecutive=int(
+                                item.get(
+                                    "invalidation_consecutive",
+                                    0,
+                                )
+                            ),
+                            last_evaluated_5m=(
+                                datetime.fromisoformat(
+                                    item["last_evaluated_5m"]
+                                ).astimezone(IST)
+                                if item.get(
+                                    "last_evaluated_5m"
+                                )
+                                else None
+                            ),
+                            active=bool(
+                                item.get(
+                                    "active",
+                                    True,
+                                )
+                            ),
+                        )
+
+                    except Exception:
+                        continue
+
+        except Exception as exc:
+            self.runtime_errors.append(
+                f"state_load:{type(exc).__name__}:{exc}"
+            )
+
+    def _save_state(self) -> None:
+        payload = {
+            "version": 1,
+            "alerted_setup_ids": sorted(
+                self.alerted_setup_ids
+            ),
+            "monitoring": {
+                setup_id: {
+                    "setup_id": state.setup_id,
+                    "symbol": state.symbol,
+                    "direction": state.direction,
+                    "signal_timestamp": (
+                        self._serialize_datetime(
+                            state.signal_timestamp
+                        )
+                    ),
+                    "entry_price": state.entry_price,
+                    "status": state.status,
+                    "invalidation_consecutive": (
+                        state.invalidation_consecutive
+                    ),
+                    "last_evaluated_5m": (
+                        self._serialize_datetime(
+                            state.last_evaluated_5m
+                        )
+                    ),
+                    "active": state.active,
+                }
+                for setup_id, state in self.monitoring.items()
+            },
+        }
+
+        temp = self.state_path.with_suffix(
+            self.state_path.suffix + ".tmp"
+        )
+
+        try:
+            temp.write_text(
+                json.dumps(
+                    payload,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            temp.replace(
+                self.state_path
+            )
+
+        except Exception as exc:
+            self.runtime_errors.append(
+                f"state_save:{type(exc).__name__}:{exc}"
+            )
+
+            try:
+                temp.unlink(
+                    missing_ok=True
+                )
+            except Exception:
+                pass
+
+    def _worker(
+        self,
+        symbol: str,
+    ) -> CP4TriggerEngine:
+        worker = self.worker_engines.get(
+            symbol
+        )
+
+        if worker is None:
+            worker = CP4TriggerEngine()
+            self.worker_engines[symbol] = worker
+
+        return worker
+
+    @staticmethod
+    def _single_stock_cycle(
+        cp2_cycle: CP2Cycle,
+        stock: StockData,
+    ) -> CP2Cycle:
+        return CP2Cycle(
+            timestamp=cp2_cycle.timestamp,
+            endpoints={},
+            stocks={
+                stock.symbol: stock
+            },
+            nifty_payload=cp2_cycle.nifty_payload,
+            nifty_error=cp2_cycle.nifty_error,
+            expected_stock_count=(
+                cp2_cycle.expected_stock_count
+            ),
+        )
+
+    def _run_one_stock(
+        self,
+        symbol: str,
+        stock: StockData,
+        cp2_cycle: CP2Cycle,
+        now: datetime,
+    ) -> tuple[str, Any, list[Any], list[str]]:
+        try:
+            worker = self._worker(
+                symbol
+            )
+
+            result = worker.cycle(
+                self._single_stock_cycle(
+                    cp2_cycle,
+                    stock,
+                ),
+                now=now,
+            )
+
+            stock_result = result.stock_results.get(
+                symbol
+            )
+
+            candidates: list[Any] = []
+
+            if worker.hunter.last_cycle is not None:
+                hunter_result = (
+                    worker.hunter.last_cycle.stock_results.get(
+                        symbol
+                    )
+                )
+
+                if hunter_result is not None:
+                    candidates = list(
+                        hunter_result.candidates
+                    )
+
+            errors = (
+                list(stock_result.errors)
+                if stock_result is not None
+                else [
+                    "cp4_stock_result_unavailable"
+                ]
+            )
+
+            signals = (
+                list(stock_result.signals)
+                if stock_result is not None
+                else []
+            )
+
+            return (
+                symbol,
+                stock_result,
+                candidates,
+                errors
+                + [
+                    f"__SIGNALS__:{len(signals)}"
+                ],
+            )
+
+        except Exception as exc:
+            return (
+                symbol,
+                None,
+                [],
+                [
+                    f"worker:{type(exc).__name__}:{exc}"
+                ],
+            )
+
+    async def _process_universe(
+        self,
+        cp2_cycle: CP2Cycle,
+        now: datetime,
+    ) -> tuple[
+        dict[str, Any],
+        list[Any],
+        list[Signal],
+        list[str],
+    ]:
+        semaphore = asyncio.Semaphore(
+            self.worker_limit
+        )
+
+        async def task(
+            symbol: str,
+            stock: StockData,
+        ):
+            async with semaphore:
+                return await asyncio.to_thread(
+                    self._run_one_stock,
+                    symbol,
+                    stock,
+                    cp2_cycle,
+                    now,
+                )
+
+        jobs = [
+            task(
+                symbol,
+                stock,
+            )
+            for symbol, stock
+            in cp2_cycle.stocks.items()
+        ]
+
+        results = await asyncio.gather(
+            *jobs,
+            return_exceptions=True,
+        )
+
+        stock_results: dict[str, Any] = {}
+        candidates: list[Any] = []
+        new_signals: list[Signal] = []
+        errors: list[str] = []
+
+        for item in results:
+            if isinstance(
+                item,
+                Exception,
+            ):
+                errors.append(
+                    f"universe_worker:"
+                    f"{type(item).__name__}:"
+                    f"{item}"
+                )
+                continue
+
+            (
+                symbol,
+                stock_result,
+                stock_candidates,
+                worker_errors,
+            ) = item
+
+            if stock_result is not None:
+                stock_results[symbol] = (
+                    stock_result
+                )
+
+            candidates.extend(
+                stock_candidates
+            )
+
+            signal_count = 0
+
+            for message in worker_errors:
+                if message.startswith(
+                    "__SIGNALS__:"
+                ):
+                    try:
+                        signal_count = int(
+                            message.split(
+                                ":",
+                                1,
+                            )[1]
+                        )
+                    except Exception:
+                        signal_count = 0
+                else:
+                    errors.append(
+                        f"{symbol}:{message}"
+                    )
+
+            if signal_count:
+                worker = self.worker_engines.get(
+                    symbol
+                )
+
+                if (
+                    worker is not None
+                    and worker.last_cycle is not None
+                ):
+                    result = (
+                        worker.last_cycle.stock_results.get(
+                            symbol
+                        )
+                    )
+
+                    if result is not None:
+                        new_signals.extend(
+                            result.signals
+                        )
+
+        deduped: dict[str, Signal] = {}
+
+        for signal in new_signals:
+            deduped.setdefault(
+                signal.setup_id,
+                signal,
+            )
+
+        return (
+            stock_results,
+            candidates,
+            list(deduped.values()),
+            errors,
+        )
+
+    def _candidate_funnel(
+        self,
+        cp2_cycle: CP2Cycle,
+        stock_results: Mapping[str, Any],
+        candidates: list[Any],
+        new_signals: list[Signal],
+        now: datetime,
+    ) -> FunnelCounts:
+        """Build diagnostic funnel counts without changing strategy decisions."""
+
+        universe = (
+            cp2_cycle.expected_stock_count
+        )
+
+        price_eligible = 0
+        valid_data = 0
+        regime = 0
+        impulse = 0
+        pullback = 0
+        structure = 0
+        trend = 0
+        early_entry = 0
+        reacceleration = 0
+
+        for stock in cp2_cycle.stocks.values():
+            if not stock.healthy:
+                continue
+
+            valid_data += 1
+
+            idx = completed_1m_index(
+                stock.candles_1m,
+                now,
+            )
+
+            if (
+                idx is not None
+                and stock.candles_1m[
+                    idx
+                ].close <= 1200
+            ):
+                price_eligible += 1
+
+        nifty_bull: dict[
+            datetime,
+            bool,
+        ] = {}
+
+        nifty_bear: dict[
+            datetime,
+            bool,
+        ] = {}
+
+        if cp2_cycle.nifty_payload is not None:
+            rows = cp2_cycle.nifty_payload.get(
+                "5m"
+            )
+
+            if isinstance(rows, list):
+                from .core import validate_candles
+
+                nifty_candles, _ = validate_candles(
+                    rows
+                )
+
+                if nifty_candles:
+                    bull, bear = nifty_regime(
+                        nifty_candles
+                    )
+
+                    nifty_bull = {
+                        c.timestamp: bool(v)
+                        for c, v
+                        in zip(
+                            nifty_candles,
+                            bull,
+                        )
+                        if v is not None
+                    }
+
+                    nifty_bear = {
+                        c.timestamp: bool(v)
+                        for c, v
+                        in zip(
+                            nifty_candles,
+                            bear,
+                        )
+                        if v is not None
+                    }
+
+        for candidate in candidates:
+            if candidate.impulse is not None:
+                impulse += 1
+
+            if candidate.pullback is None:
+                continue
+
+            pullback += 1
+
+            if candidate.pullback.structure is not None:
+                structure += 1
+
+            if candidate.stock_trend is True:
+                trend += 1
+
+            if candidate.nifty_regime is True:
+                regime += 1
+
+            stock = cp2_cycle.stocks.get(
+                candidate.symbol
+            )
+
+            worker = stock_results.get(
+                candidate.symbol
+            )
+
+            candles_5m = None
+
+            if worker is not None:
+                engine = getattr(
+                    self,
+                    "worker_engines",
+                    {},
+                ).get(
+                    candidate.symbol
+                )
+
+                if (
+                    engine is not None
+                    and engine.hunter.last_cycle is not None
+                ):
+                    hr = (
+                        engine.hunter.last_cycle.stock_results.get(
+                            candidate.symbol
+                        )
+                    )
+
+                    if hr is not None:
+                        candles_5m = hr.candles_5m
+
+            if (
+                stock is None
+                or candles_5m is None
+            ):
+                continue
+
+            idx = completed_1m_index(
+                stock.candles_1m,
+                now,
+            )
+
+            if idx is None:
+                continue
+
+            price = stock.candles_1m[
+                idx
+            ].close
+
+            ep = calculate_early_entry_from_5m(
+                candidate,
+                candles_5m,
+                price,
+            )
+
+            if (
+                ep is not None
+                and math.isfinite(ep)
+                and ep <= 0.45
+            ):
+                early_entry += 1
+
+            if candidate.direction == "LONG":
+                reaccel = long_reacceleration(
+                    stock.candles_1m,
+                    idx,
+                )
+            else:
+                reaccel = short_reacceleration(
+                    stock.candles_1m,
+                    idx,
+                )
+
+            if reaccel:
+                reacceleration += 1
+
+        return FunnelCounts(
+            universe=universe,
+            price_eligible=price_eligible,
+            valid_data=valid_data,
+            regime=regime,
+            impulse=impulse,
+            pullback=pullback,
+            structure=structure,
+            trend=trend,
+            early_entry=early_entry,
+            reacceleration=reacceleration,
+            signals=len(new_signals),
+        )
+
+    @staticmethod
+    def _trend_invalid_now(
+        stock: StockData,
+        direction: str,
+        candle_index: int,
+    ) -> bool:
+        candles = aggregate_5m(
+            stock.candles_1m
+        )
+
+        if (
+            candle_index < 5
+            or candle_index >= len(candles)
+        ):
+            return False
+
+        closes = [
+            c.close
+            for c in candles
+        ]
+
+        e20 = ema(
+            closes,
+            20,
+        )
+
+        e60 = ema(
+            closes,
+            60,
+        )
+
+        c = candles[
+            candle_index
+        ].close
+
+        if (
+            e20[candle_index] is None
+            or e60[candle_index] is None
+            or e20[candle_index - 5] is None
+        ):
+            return False
+
+        if direction == "LONG":
+            return (
+                c < e20[candle_index]
+                and e20[candle_index]
+                <= e20[candle_index - 5]
+                and e20[candle_index]
+                <= e60[candle_index]
+            )
+
+        if direction == "SHORT":
+            return (
+                c > e20[candle_index]
+                and e20[candle_index]
+                >= e20[candle_index - 5]
+                and e20[candle_index]
+                >= e60[candle_index]
+            )
+
+        return False
+
+    def _monitor_signal(
+        self,
+        state: MonitoringState,
+        stock: StockData,
+    ) -> None:
+        if not state.active:
+            return
+
+        candles = aggregate_5m(
+            stock.candles_1m
+        )
+
+        if not candles:
+            return
+
+        completed = [
+            i
+            for i, c in enumerate(candles)
+            if c.timestamp
+            + timedelta(minutes=5)
+            <= stock.last_timestamp
+            if stock.last_timestamp
+        ]
+
+        if not completed:
+            return
+
+        idx = completed[-1]
+
+        ts = candles[
+            idx
+        ].timestamp
+
+        if state.last_evaluated_5m == ts:
+            return
+
+        invalid = self._trend_invalid_now(
+            stock,
+            state.direction,
+            idx,
+        )
+
+        state.last_evaluated_5m = ts
+
+        if invalid:
+            state.invalidation_consecutive += 1
+
+            if state.invalidation_consecutive >= 2:
+                state.status = "INVALIDATED"
+                state.active = False
+            else:
+                state.status = (
+                    "INVALIDATION_PENDING_1_OF_2"
+                )
+        else:
+            state.invalidation_consecutive = 0
+            state.status = "TREND_VALID"
+
+    def _update_monitoring(
+        self,
+        cp2_cycle: CP2Cycle,
+        new_signals: list[Signal],
+    ) -> None:
+        for signal in new_signals:
+            self.monitoring.setdefault(
+                signal.setup_id,
+                MonitoringState(
+                    setup_id=signal.setup_id,
+                    symbol=signal.symbol,
+                    direction=signal.direction,
+                    signal_timestamp=(
+                        signal.signal_timestamp
+                    ),
+                    entry_price=signal.entry_price,
+                    status=(
+                        signal.trend_invalidation_status
+                    ),
+                ),
+            )
+
+        for state in list(
+            self.monitoring.values()
+        ):
+            stock = cp2_cycle.stocks.get(
+                state.symbol
+            )
+
+            if (
+                stock is not None
+                and stock.healthy
+            ):
+                try:
+                    self._monitor_signal(
+                        state,
+                        stock,
+                    )
+                except Exception as exc:
+                    self.runtime_errors.append(
+                        f"monitor:{state.setup_id}:"
+                        f"{type(exc).__name__}:{exc}"
+                    )
+
+    @staticmethod
+    def _report_due(
+        now: datetime,
+        last_slot: datetime | None,
+    ) -> datetime | None:
+        local = now.astimezone(
+            IST
+        )
+
+        if (
+            local.time() < HUNT_START
+            or local.time() > MARKET_END
+        ):
+            return None
+
+        if local.minute % 15 != 0:
+            return None
+
+        slot = local.replace(
+            second=0,
+            microsecond=0,
+        )
+
+        if last_slot == slot:
+            return None
+
+        return slot
+
+    def _build_report(
+        self,
+        now: datetime,
+        cp2_cycle: CP2Cycle,
+        candidates: list[Any],
+        new_signals: list[Signal],
+        stock_results: Mapping[str, Any]
+        | None = None,
+    ) -> CycleReport:
+        calculable = (
+            cp2_cycle.healthy_stock_count
+        )
+
+        skipped = (
+            cp2_cycle.expected_stock_count
+            - calculable
+        )
+
+        developing = sum(
+            c.state == "IMPULSE_DETECTED"
+            for c in candidates
+        )
+
+        qualified = sum(
+            c.state == "QUALIFIED_PULLBACK"
+            for c in candidates
+        )
+
+        armed = sum(
+            c.state == "TRIGGER_ARMED"
+            for c in candidates
+        )
+
+        funnel = self._candidate_funnel(
+            cp2_cycle,
+            stock_results or {},
+            candidates,
+            new_signals,
+            now,
+        )
+
+        return CycleReport(
+            timestamp=now,
+            universe=(
+                cp2_cycle.expected_stock_count
+            ),
+            currently_calculable=calculable,
+            temporarily_skipped=max(
+                0,
+                skipped,
+            ),
+            developing=developing,
+            qualified=qualified,
+            armed=armed,
+            new_signals=len(
+                new_signals
+            ),
+            hunter_status=(
+                "RUNNING"
+                if self.running
+                else "STOPPED"
+            ),
+            funnel=funnel,
+        )
+
+    async def cycle_once(
+        self,
+        now: datetime | None = None,
+    ) -> CP5Cycle:
+        ts = (
+            now
+            or datetime.now(IST)
+        ).astimezone(IST)
+
+        cp2_cycle = await self.data_engine.cycle(
+            now=ts
+        )
+
+        (
+            stock_results,
+            candidates,
+            new_signals,
+            errors,
+        ) = await self._process_universe(
+            cp2_cycle,
+            ts,
+        )
+
+        for signal in new_signals:
+            if (
+                signal.setup_id
+                not in self.alerted_setup_ids
+            ):
+                try:
+                    self.alert_callback(
+                        signal
+                    )
+                except Exception as exc:
+                    errors.append(
+                        f"alert:{signal.setup_id}:"
+                        f"{type(exc).__name__}:{exc}"
+                    )
+                finally:
+                    self.alerted_setup_ids.add(
+                        signal.setup_id
+                    )
+
+        self._update_monitoring(
+            cp2_cycle,
+            new_signals,
+        )
+
+        report = None
+
+        slot = self._report_due(
+            ts,
+            self.last_report_slot,
+        )
+
+        if slot is not None:
+            self.last_report_slot = slot
+
+            try:
+                report = self._build_report(
+                    ts,
+                    cp2_cycle,
+                    candidates,
+                    new_signals,
+                    stock_results,
+                )
+            except Exception as exc:
+                errors.append(
+                    f"report:{type(exc).__name__}:{exc}"
+                )
+
+        cycle = CP5Cycle(
+            timestamp=ts,
+            cp2_cycle=cp2_cycle,
+            stock_results=stock_results,
+            candidates=candidates,
+            new_signals=new_signals,
+            monitoring=dict(
+                self.monitoring
+            ),
+            report=report,
+            errors=errors,
+        )
+
+        self.last_cycle = cycle
+
+        self._save_state()
+
+        return cycle
+
+    @staticmethod
+    def format_engine_panel(
+        cycle: CP5Cycle,
+    ) -> str:
+        cp2 = cycle.cp2_cycle
+
+        nifty = (
+            "UNAVAILABLE"
+            if cp2.nifty_error
+            else "AVAILABLE"
+        )
+
+        endpoints = ", ".join(
+            f"{name.upper()}="
+            f"{'OK' if not data.error else 'FAIL'}"
+            for name, data
+            in sorted(
+                cp2.endpoints.items()
+            )
+        )
+
+        return (
+            "=== PANEL 1 — ENGINE / MARKET ===\n"
+            f"Engine: RUNNING\n"
+            f"Session: "
+            f"{cycle.timestamp:%H:%M:%S IST}\n"
+            f"NIFTY regime data: {nifty}\n"
+            f"Data: "
+            f"{cp2.healthy_stock_count}/"
+            f"{cp2.expected_stock_count} healthy | "
+            f"{cp2.stale_stock_count} stale\n"
+            f"Active stock count: "
+            f"{len(cp2.stocks)}\n"
+            f"Latest processing: "
+            f"{cycle.timestamp:%Y-%m-%d %H:%M:%S IST}\n"
+            f"Endpoints: {endpoints}\n"
+        )
+
+    @staticmethod
+    def format_hunter_panel(
+        cycle: CP5Cycle,
+    ) -> str:
+        developing = [
+            c
+            for c in cycle.candidates
+            if c.state
+            == "IMPULSE_DETECTED"
+        ]
+
+        qualified = [
+            c
+            for c in cycle.candidates
+            if c.state
+            == "QUALIFIED_PULLBACK"
+        ]
+
+        armed = [
+            c
+            for c in cycle.candidates
+            if c.state
+            == "TRIGGER_ARMED"
+        ]
+
+        strongest = sorted(
+            [
+                *qualified,
+                *armed,
+            ],
+            key=lambda c: float(
+                c.quality.get(
+                    "impulse_atr_multiple"
+                )
+                or 0.0
+            ),
+            reverse=True,
+        )[:10]
+
+        lines = [
+            "=== PANEL 2 — PULLBACK HUNTER ===",
+            f"Developing: {len(developing)}",
+            f"Qualified: {len(qualified)}",
+            f"Trigger-armed: {len(armed)}",
+            "Strongest current candidates:",
+        ]
+
+        for c in strongest:
+            age = max(
+                0,
+                int(
+                    (
+                        cycle.timestamp
+                        - c.created_at
+                    ).total_seconds()
+                    // 60
+                ),
+            )
+
+            lines.append(
+                f"  {c.symbol} | "
+                f"{c.direction} | "
+                f"age={age}m | "
+                f"{c.state} | "
+                f"{c.setup_id}"
+            )
+
+        return (
+            "\n".join(lines)
+            + "\n"
+        )
+
+    @staticmethod
+    def format_signal_panel(
+        cycle: CP5Cycle,
+    ) -> str:
+        lines = [
+            "=== PANEL 3 — SIGNAL / MONITOR ===",
+            f"New signals this cycle: "
+            f"{len(cycle.new_signals)}",
+        ]
+
+        for signal in cycle.new_signals:
+            lines.append(
+                f"  {signal.symbol} | "
+                f"{signal.direction} | "
+                f"entry=₹{signal.entry_price:.2f} | "
+                f"{signal.signal_timestamp:%H:%M:%S} | "
+                f"{signal.setup_id} | "
+                f"{signal.trend_invalidation_status}"
+            )
+
+        active = [
+            s
+            for s in cycle.monitoring.values()
+            if s.active
+        ]
+
+        lines.append(
+            f"Active triggered setups: "
+            f"{len(active)}"
+        )
+
+        for state in active:
+            lines.append(
+                f"  {state.symbol} | "
+                f"{state.direction} | "
+                f"{state.setup_id} | "
+                f"{state.status}"
+            )
+
+        return (
+            "\n".join(lines)
+            + "\n"
+        )
+
+    @staticmethod
+    def format_cycle_panel(
+        report: CycleReport | None,
+    ) -> str:
+        if report is None:
+            return (
+                "=== PANEL 4 — 15-MINUTE CYCLE ===\n"
+                "No report due this minute.\n"
+            )
+
+        return (
+            "=== PANEL 4 — 15-MINUTE CYCLE ===\n"
+            f"{report.timestamp:%H:%M} CYCLE\n"
+            f"Universe: {report.universe}\n"
+            f"Currently calculable: "
+            f"{report.currently_calculable}\n"
+            f"Temporarily skipped: "
+            f"{report.temporarily_skipped}\n"
+            f"Developing: {report.developing}\n"
+            f"Qualified: {report.qualified}\n"
+            f"Armed: {report.armed}\n"
+            f"New signals: {report.new_signals}\n"
+            f"Hunter status: "
+            f"{report.hunter_status}\n"
+            "Funnel: "
+            f"{report.funnel.universe} → "
+            f"{report.funnel.price_eligible} price → "
+            f"{report.funnel.valid_data} data → "
+            f"{report.funnel.impulse} impulse → "
+            f"{report.funnel.pullback} pullback → "
+            f"{report.funnel.structure} structure → "
+            f"{report.funnel.trend} trend → "
+            f"{report.funnel.early_entry} early-entry → "
+            f"{report.funnel.reacceleration} reacceleration → "
+            f"{report.funnel.signals} SIGNALS\n"
+        )
+
+    async def run_forever(self) -> None:
+        self.running = True
+
+        while self.running:
+            now = datetime.now(IST)
+
+            if now.time() > MARKET_END:
+                self.running = False
+                break
+
+            try:
+                cycle = await self.cycle_once(
+                    now=now
+                )
+
+                print(
+                    self.format_engine_panel(
+                        cycle
+                    ),
+                    flush=True,
+                )
+
+                print(
+                    self.format_hunter_panel(
+                        cycle
+                    ),
+                    flush=True,
+                )
+
+                print(
+                    self.format_signal_panel(
+                        cycle
+                    ),
+                    flush=True,
+                )
+
+                if cycle.report is not None:
+                    print(
+                        self.format_cycle_panel(
+                            cycle.report
+                        ),
+                        flush=True,
+                    )
+
+            except Exception as exc:
+                self.runtime_errors.append(
+                    f"cycle:{type(exc).__name__}:{exc}"
+                )
+
+                print(
+                    "CP5 CYCLE ERROR "
+                    "(engine continues): "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+
+            now = datetime.now(IST)
+
+            next_minute = (
+                now.replace(
+                    second=0,
+                    microsecond=0,
+                )
+                + timedelta(minutes=1)
+            )
+
+            await asyncio.sleep(
+                max(
+                    0.1,
+                    (
+                        next_minute
+                        - now
+                    ).total_seconds(),
+                )
+            )
+
+    def stop(self) -> None:
+        self.running = False
+
+    def health(self) -> dict[str, Any]:
+        cycle = self.last_cycle
+
+        return {
+            "engine": (
+                "RUNNING"
+                if self.running
+                else "STOPPED"
+            ),
+            "stocks_in_last_cycle": (
+                len(
+                    cycle.stock_results
+                )
+                if cycle
+                else 0
+            ),
+            "candidates": (
+                len(
+                    cycle.candidates
+                )
+                if cycle
+                else 0
+            ),
+            "new_signals": (
+                len(
+                    cycle.new_signals
+                )
+                if cycle
+                else 0
+            ),
+            "active_monitors": sum(
+                s.active
+                for s in self.monitoring.values()
+            ),
+            "invalidated_monitors": sum(
+                not s.active
+                for s in self.monitoring.values()
+            ),
+            "alerted_setup_ids": len(
+                self.alerted_setup_ids
+            ),
+            "runtime_errors": len(
+                self.runtime_errors
+            ),
+        }
