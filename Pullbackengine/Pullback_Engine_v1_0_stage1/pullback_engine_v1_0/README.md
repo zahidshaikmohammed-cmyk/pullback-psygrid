@@ -22,11 +22,12 @@ This package is the first implementation stage of the locked specification.
 - CP5 continuous runtime, monitoring, persistence and diagnostic funnel
 - CP6 four-panel operator output
 - CP7 integration supervisor composing CP5 runtime with CP6 output
+- CP8 final verification/parity audit with deterministic conformance checks
 - architecture-focused unit and integration tests
 
 ## Runtime architecture
 
-**CP2 → CP3 → CP4 → CP5 → CP6 → CP7**
+**CP2 → CP3 → CP4 → CP5 → CP6 → CP7 → CP8**
 
 - CP2: data ingestion and stock/NIFTY health
 - CP3: 5m pullback anatomy and candidate state
@@ -34,8 +35,19 @@ This package is the first implementation stage of the locked specification.
 - CP5: continuous runtime, concurrency, alert-once delivery, monitoring and 15-minute reports
 - CP6: operator display only; no strategy decisions
 - CP7: application integration/lifecycle boundary; composes exactly one CP5 cycle with one CP6 snapshot and owns the canonical application loop
+- CP8: final verification/parity audit; validates the implementation against the locked v1.0 contracts without changing strategy behavior
 
-CP7 does not alter strategy mathematics or loosen any signal gate. A zero-signal cycle remains a valid cycle and hunting continues.
+CP7 and CP8 do not alter strategy mathematics or loosen any signal gate. A zero-signal cycle remains a valid cycle and hunting continues.
+
+## CP8 final verification
+
+Run the final audit directly:
+
+```powershell
+python run_cp8.py
+```
+
+CP8 verifies timing/no-lookahead, data integrity, indicator availability, pullback/trigger parity, state-machine completeness, CP4/CP5/CP6/CP7 integration contracts, and the no-fabrication rule. A failed audit exits non-zero; CP8 never hides a failed contract.
 
 ## Deliberate rule
 
@@ -62,6 +74,12 @@ Canonical integrated runtime:
 python run_cp7.py
 ```
 
-Lower-level launchers remain available for individual checkpoints. CP7 is the canonical CP5+CP6 application launcher.
+Final verification:
+
+```powershell
+python run_cp8.py
+```
+
+Lower-level launchers remain available for individual checkpoints. CP7 is the canonical CP5+CP6 application launcher; CP8 is the final verification gate.
 
 The current endpoint host may be unreachable from a build environment; connectivity is therefore reported by the runtime rather than falsely reported as verified.
