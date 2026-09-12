@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from pathlib import Path
 
 from pullback_engine.core import IST
 from pullback_engine.cp5 import FunnelCounts, MonitoringState
@@ -54,6 +53,7 @@ def make_cycle():
         "Report",
         (),
         {
+            "timestamp": ts,
             "universe": 450,
             "funnel": FunnelCounts(450, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0),
         },
@@ -79,12 +79,10 @@ def make_cycle():
     )()
 
 
-def test_cp7_single_cycle_composes_cp5_and_cp6(tmp_path: Path):
+def test_cp7_single_cycle_composes_cp5_and_cp6():
     engine = FakeEngine(make_cycle())
     cp7 = CP7IntegrationEngine(engine=engine, output=CP6OutputSystem())
-
     result = asyncio.run(cp7.cycle_once(make_cycle().timestamp))
-
     assert engine.calls == 1
     assert result.timestamp == make_cycle().timestamp
     assert result.snapshot.panel_1
@@ -98,11 +96,9 @@ def test_cp7_does_not_mutate_cp5_cycle():
     cycle = make_cycle()
     engine = FakeEngine(cycle)
     cp7 = CP7IntegrationEngine(engine=engine)
-
     before = (cycle.timestamp, len(cycle.candidates), len(cycle.new_signals), len(cycle.monitoring))
     asyncio.run(cp7.cycle_once(cycle.timestamp))
     after = (cycle.timestamp, len(cycle.candidates), len(cycle.new_signals), len(cycle.monitoring))
-
     assert before == after
 
 
