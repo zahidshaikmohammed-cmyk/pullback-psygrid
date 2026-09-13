@@ -6,13 +6,13 @@ from pullback_engine.participation import (
 )
 
 
-def candles(volumes, closes=None):
+def candles(volumes, closes=None, short=False):
     closes = closes or [100.0 + i * 0.1 for i in range(len(volumes))]
     start = datetime(2026, 9, 12, 10, 0, tzinfo=IST)
     return [
         Candle(
             start + timedelta(minutes=5 * i),
-            closes[i] - 0.1,
+            closes[i] + 0.1 if short else closes[i] - 0.1,
             closes[i] + 0.2,
             closes[i] - 0.2,
             closes[i],
@@ -46,6 +46,7 @@ def test_short_return_is_detected_symmetrically():
     c = candles(
         [1000, 1000, 1000, 500, 600, 750],
         [100, 99, 98, 99, 98.95, 98.80],
+        short=True,
     )
     result = detect_early_participation_return(
         c,
