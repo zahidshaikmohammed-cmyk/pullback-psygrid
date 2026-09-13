@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio, json, time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -179,7 +180,10 @@ class CP2DataEngine:
             if stock.stale:
                 stock.errors.append(f"stale:{age:.1f}s")
 
-            stock.healthy = not stock.stale and not stock.errors
+            # Historical row-quality errors remain visible diagnostically,
+            # but do not make an otherwise current stock unusable. Invalid
+            # rows have already been excluded by validate_candles().
+            stock.healthy = not stock.stale and bool(valid)
 
         except Exception as exc:
             stock.errors.append(
