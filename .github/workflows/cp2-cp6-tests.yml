@@ -28,7 +28,7 @@ jobs:
         run: python -m pytest -q tests
       - name: Compile and smoke-run CP7 launcher
         run: |
-          python -m py_compile pullback_engine/cp7.py run_cp7.py run_service.py
+          python -m py_compile pullback_engine/cp7.py pullback_engine/dashboard.py run_cp7.py run_service.py
           set +e
           timeout 30s python run_cp7.py
           status=$?
@@ -81,7 +81,7 @@ jobs:
           python3 -m venv "$APP_DIR/.venv"
           "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
           "$APP_DIR/.venv/bin/pip" install -r "$SOURCE_DIR/requirements.txt"
-          "$APP_DIR/.venv/bin/python" -m py_compile "$SOURCE_DIR/run_service.py" "$SOURCE_DIR/run_cp7.py"
+          "$APP_DIR/.venv/bin/python" -m py_compile "$SOURCE_DIR/run_service.py" "$SOURCE_DIR/run_cp7.py" "$SOURCE_DIR/pullback_engine/dashboard.py"
 
           curl -sS --max-time 10 http://127.0.0.1:10000/ -o /tmp/pullback-psygrid-root.json
           curl -sS --max-time 10 http://127.0.0.1:10000/ready -o /tmp/pullback-psygrid-ready.json
@@ -94,26 +94,17 @@ jobs:
           STOCK_COUNT=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('stock_count',''))")
           SUBSCRIBED_COUNT=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('subscribed_count',''))")
 
-          if [ "$ROOT_SERVICE" != "PSYGRID" ]; then
-            echo "Psygrid root contract failed: service=$ROOT_SERVICE"
+          if [ "$ROOT_SERVICE" != "PSYGRID" ] || [ "$ROOT_UNIVERSE" != "450" ] || [ "$READY_SERVICE" != "PSYGRID" ]; then
+            echo "Psygrid contract failed: root_service=$ROOT_SERVICE root_universe=$ROOT_UNIVERSE ready_service=$READY_SERVICE"
             exit 1
           fi
-          if [ "$ROOT_UNIVERSE" != "450" ]; then
-            echo "Psygrid root contract failed: universe_size=$ROOT_UNIVERSE"
-            exit 1
-          fi
-          if [ "$READY_SERVICE" != "PSYGRID" ]; then
-            echo "Psygrid readiness failed: service=$READY_SERVICE"
-            exit 1
-          fi
-
           echo "Psygrid readiness: session=$SESSION_STATUS, feed=$FEED_STATUS, stocks=$STOCK_COUNT, subscribed=$SUBSCRIBED_COUNT"
 
           if [ "$SESSION_STATUS" = "CLOSED" ]; then
             echo "Psygrid contract check: PASS (market CLOSED; live endpoints are not required to contain live stocks)"
           else
             if [ "$STOCK_COUNT" != "450" ] || [ "$SUBSCRIBED_COUNT" != "450" ]; then
-              echo "Psygrid readiness failed during live session: stock_count=$STOCK_COUNT, subscribed_count=$SUBSCRIBED_COUNT"
+              echo "Psygrid readiness failed during live session: stock_count=$STOCK_COUNT, subscribed=$SUBSCRIBED_COUNT"
               exit 1
             fi
             curl -fsS --max-time 10 http://127.0.0.1:10000/public/live-a.json -o /tmp/pullback-psygrid-live-a.json
@@ -124,36 +115,18 @@ jobs:
           sudo cp "$SOURCE_DIR/deploy/pullback-engine.service" /etc/systemd/system/pullback-engine.service
           sudo systemctl daemon-reload
           sudo systemctl enable pullback-engine.service
-
-          echo '--- SYSTEMD UNIT ---'
-          sudo systemctl cat pullback-engine.service
-
-          echo '--- SYSTEMD VALIDATION ---'
-          sudo systemd-analyze verify /etc/systemd/system/pullback-engine.service
-
-          echo '--- STARTING PULLBACK ENGINE ---'
-          if ! sudo systemctl restart pullback-engine.service; then
-            echo '=== PULLBACK ENGINE START FAILED ==='
-            sudo systemctl status pullback-engine.service --no-pager -l || true
-            echo '=== SYSTEMD PROPERTIES ==='
-            sudo systemctl show pullback-engine.service -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ExecStart || true
-            echo '=== JOURNAL ==='
-            sudo journalctl -u pullback-engine.service -n 100 --no-pager || true
-            exit 1
-          fi
-
+          sudo systemctl restart pullback-engine.service
           sleep 3
-
           if ! sudo systemctl is-active --quiet pullback-engine.service; then
-            echo '=== PULLBACK ENGINE INACTIVE AFTER RESTART ==='
+            echo '=== PULLBACK ENGINE INACTIVE ==='
             sudo systemctl status pullback-engine.service --no-pager -l || true
-            echo '=== SYSTEMD PROPERTIES ==='
-            sudo systemctl show pullback-engine.service -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ExecStart || true
-            echo '=== JOURNAL ==='
             sudo journalctl -u pullback-engine.service -n 100 --no-pager || true
             exit 1
           fi
 
+          curl -fsS --max-time 5 http://127.0.0.1:10001/health
+          curl -fsS --max-time 5 http://127.0.0.1:10001/api/state >/tmp/pullback-dashboard-state.json
+          "$APP_DIR/.venv/bin/python" -c "import json; d=json.load(open('/tmp/pullback-dashboard-state.json')); assert d.get('service')=='PULLBACK_ENGINE_V1_0'; assert d.get('expected_stocks')==450; print('Pullback dashboard: PASS')"
           echo 'Pullback Engine service: ACTIVE'
           sudo systemctl --no-pager --full status pullback-engine.service | head -n 25
           REMOTE
