@@ -112,13 +112,9 @@ jobs:
                       'Psygrid readiness failed during live session: '
                       f"stock_count={ready.get('stock_count')!r}, subscribed_count={ready.get('subscribed_count')!r}"
                   )
-              Path('/tmp/pullback-psygrid-live-a.json').write_text('')
-          PY
-
-          if [ "$($APP_DIR/.venv/bin/python -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('session_status',''))")" != "CLOSED" ]; then
-            curl -fsS --max-time 10 http://127.0.0.1:10000/public/live-a.json -o /tmp/pullback-psygrid-live-a.json
-            curl -fsS --max-time 10 http://127.0.0.1:10000/public/nifty.json -o /tmp/pullback-psygrid-nifty.json
-            "$APP_DIR/.venv/bin/python" - <<'PY'
+              curl -fsS --max-time 10 http://127.0.0.1:10000/public/live-a.json -o /tmp/pullback-psygrid-live-a.json
+              curl -fsS --max-time 10 http://127.0.0.1:10000/public/nifty.json -o /tmp/pullback-psygrid-nifty.json
+              "$APP_DIR/.venv/bin/python" - <<'PY'
           import json
           from pathlib import Path
 
@@ -138,9 +134,36 @@ jobs:
           sudo cp "$SOURCE_DIR/deploy/pullback-engine.service" /etc/systemd/system/pullback-engine.service
           sudo systemctl daemon-reload
           sudo systemctl enable pullback-engine.service
-          sudo systemctl restart pullback-engine.service
+
+          echo '--- SYSTEMD UNIT ---'
+          sudo systemctl cat pullback-engine.service
+
+          echo '--- SYSTEMD VALIDATION ---'
+          sudo systemd-analyze verify /etc/systemd/system/pullback-engine.service
+
+          echo '--- STARTING PULLBACK ENGINE ---'
+          if ! sudo systemctl restart pullback-engine.service; then
+            echo '=== PULLBACK ENGINE START FAILED ==='
+            sudo systemctl status pullback-engine.service --no-pager -l || true
+            echo '=== SYSTEMD PROPERTIES ==='
+            sudo systemctl show pullback-engine.service -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ExecStart || true
+            echo '=== JOURNAL ==='
+            sudo journalctl -u pullback-engine.service -n 100 --no-pager || true
+            exit 1
+          fi
+
           sleep 3
-          sudo systemctl is-active --quiet pullback-engine.service
+
+          if ! sudo systemctl is-active --quiet pullback-engine.service; then
+            echo '=== PULLBACK ENGINE INACTIVE AFTER RESTART ==='
+            sudo systemctl status pullback-engine.service --no-pager -l || true
+            echo '=== SYSTEMD PROPERTIES ==='
+            sudo systemctl show pullback-engine.service -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode -p ExecMainStatus -p ExecStart || true
+            echo '=== JOURNAL ==='
+            sudo journalctl -u pullback-engine.service -n 100 --no-pager || true
+            exit 1
+          fi
+
           echo 'Pullback Engine service: ACTIVE'
           sudo systemctl --no-pager --full status pullback-engine.service | head -n 25
           REMOTE
