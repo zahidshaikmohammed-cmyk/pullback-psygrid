@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 
 from pullback_engine.core import IST, MARKET_END, MARKET_START
 from pullback_engine.cp7 import CP7IntegrationEngine
+from pullback_engine.dashboard import DashboardState, start_dashboard
 
 
 def _next_market_start(now: datetime) -> datetime:
@@ -27,19 +28,24 @@ def _in_market_session(now: datetime) -> bool:
 
 
 async def main() -> None:
+    dashboard_state = DashboardState()
+    current_engine: list[CP7IntegrationEngine | None] = [None]
+    dashboard = start_dashboard(dashboard_state, lambda: current_engine[0])
+    print(f"Pullback Engine dashboard listening on {dashboard.server_address}", flush=True)
     while True:
         now = datetime.now(IST)
         if not _in_market_session(now):
+            current_engine[0] = None
             target = _next_market_start(now)
+            dashboard_state.set_waiting(target)
             delay = max(1.0, (target - now).total_seconds())
-            print(
-                f"Pullback Engine supervisor waiting for next market session: {target.isoformat()}",
-                flush=True,
-            )
+            print(f"Pullback Engine supervisor waiting for next market session: {target.isoformat()}", flush=True)
             await asyncio.sleep(min(delay, 60.0))
             continue
 
         engine = CP7IntegrationEngine()
+        current_engine[0] = engine
+        dashboard_state.set_entering()
         print("Pullback Engine supervisor entering market session", flush=True)
         try:
             await engine.run_forever()
@@ -47,6 +53,7 @@ async def main() -> None:
             print(f"Pullback Engine supervisor cycle error: {type(exc).__name__}: {exc}", flush=True)
         finally:
             engine.stop()
+            current_engine[0] = None
             print("Pullback Engine supervisor left market session", flush=True)
 
         await asyncio.sleep(1.0)
