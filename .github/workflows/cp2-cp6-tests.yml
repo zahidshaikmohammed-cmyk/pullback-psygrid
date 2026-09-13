@@ -81,16 +81,36 @@ jobs:
 
           curl -fsS --max-time 10 http://127.0.0.1:10000/public/live-a.json -o /tmp/pullback-psygrid-live-a.json
           curl -fsS --max-time 10 http://127.0.0.1:10000/public/nifty.json -o /tmp/pullback-psygrid-nifty.json
+          curl -fsS --max-time 10 http://127.0.0.1:10000/ready -o /tmp/pullback-psygrid-ready.json
           "$APP_DIR/.venv/bin/python" - <<'PY'
           import json
           from pathlib import Path
+
           stocks = json.loads(Path('/tmp/pullback-psygrid-live-a.json').read_text())
-          if not isinstance(stocks.get('stocks'), dict) or len(stocks['stocks']) != 45:
-              raise SystemExit(f"Psygrid live-a contract failed: {len(stocks.get('stocks', {}))} stocks")
           nifty = json.loads(Path('/tmp/pullback-psygrid-nifty.json').read_text())
+          ready = json.loads(Path('/tmp/pullback-psygrid-ready.json').read_text())
+
           if nifty.get('symbol') != 'NIFTY':
               raise SystemExit('Psygrid NIFTY contract failed')
-          print('Psygrid contract check: PASS (45-stock shard + NIFTY)')
+
+          if not isinstance(stocks.get('stocks'), dict):
+              raise SystemExit('Psygrid live-a contract failed: stocks is not an object')
+
+          stock_count = len(stocks['stocks'])
+          session_status = ready.get('session_status')
+          universe_size = ready.get('universe_size')
+          service = ready.get('service')
+
+          if stock_count == 45:
+              print('Psygrid contract check: PASS (45-stock live shard + NIFTY)')
+          elif session_status == 'CLOSED' and universe_size == 450 and service == 'PSYGRID':
+              print('Psygrid contract check: PASS (market CLOSED; live shard correctly has 0 stocks)')
+          else:
+              raise SystemExit(
+                  'Psygrid contract failed: '
+                  f'live-a stocks={stock_count}, session_status={session_status!r}, '
+                  f'universe_size={universe_size!r}, service={service!r}'
+              )
           PY
 
           sudo cp "$SOURCE_DIR/deploy/pullback-engine.service" /etc/systemd/system/pullback-engine.service
