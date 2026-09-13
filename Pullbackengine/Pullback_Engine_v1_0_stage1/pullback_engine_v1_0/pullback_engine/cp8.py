@@ -193,8 +193,8 @@ class CP8ParityAudit:
     @staticmethod
     def _cp4_source_guard() -> bool:
         from . import cp4
-        source = inspect.getsource(cp4.CP4TriggerEngine)
-        return "triggered_setup_ids" in source and "PRICE_MAX" in source and "reacceleration" in source
+        source = inspect.getsource(cp4)
+        return "candidate_is_price_eligible" in source and "PRICE_MAX" in source and "triggered_setup_ids" in source and "reacceleration" in source
 
     @staticmethod
     def _cp5_source_guard(kind: str = "invalidate") -> bool:
