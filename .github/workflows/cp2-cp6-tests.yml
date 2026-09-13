@@ -75,9 +75,13 @@ jobs:
             git -C "$APP_DIR" clean -fd
           fi
 
+          DEPLOYED_COMMIT=$(git -C "$APP_DIR" rev-parse HEAD)
+          echo "Pullback Engine deployed commit: $DEPLOYED_COMMIT"
+
           python3 -m venv "$APP_DIR/.venv"
           "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
           "$APP_DIR/.venv/bin/pip" install -r "$SOURCE_DIR/requirements.txt"
+          "$APP_DIR/.venv/bin/python" -m py_compile "$SOURCE_DIR/run_service.py" "$SOURCE_DIR/run_cp7.py"
 
           curl -sS --max-time 10 http://127.0.0.1:10000/ -o /tmp/pullback-psygrid-root.json
           curl -sS --max-time 10 http://127.0.0.1:10000/ready -o /tmp/pullback-psygrid-ready.json
