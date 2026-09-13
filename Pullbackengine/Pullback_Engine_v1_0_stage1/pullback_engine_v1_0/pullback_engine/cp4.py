@@ -86,11 +86,6 @@ def calculate_early_entry_from_5m(
         return (price - l_pb) / denominator
 
     if candidate.direction == "SHORT":
-        # CP3's SHORT representation stores the economic swing low in
-        # impulse_high_index. Valid CP3 candidates therefore use this
-        # index directly. The defensive range check below also repairs
-        # malformed/legacy candidate fixtures without changing valid
-        # production semantics.
         lo = candidate.impulse.impulse_high_index
         pb = pullback.pullback_end_index
         if not (0 <= lo < len(candles_5m) and 0 <= pb < len(candles_5m)):
@@ -103,10 +98,6 @@ def calculate_early_entry_from_5m(
             end = max(lo, pb)
             if start > end:
                 return None
-            # A malformed upstream fixture may label a different pivot
-            # while the actual economic impulse low is still present in
-            # the impulse-to-pullback interval. Recover that low only
-            # when the directionally indexed denominator is impossible.
             l_imp = min(c.low for c in candles_5m[start:end + 1])
             denominator = h_pb - l_imp
         if denominator <= 0:
@@ -142,7 +133,10 @@ class CP4TriggerEngine:
 
     @staticmethod
     def _candidate_current_regime_valid(candidate: PullbackCandidate) -> bool:
-        return candidate.nifty_regime is True
+        # NIFTY regime remains diagnostic on the candidate, but is no longer
+        # a hard trigger veto. A valid stock setup can therefore trigger when
+        # the benchmark feed is unavailable or temporarily non-confirming.
+        return True
 
     @staticmethod
     def _candidate_core_5m_valid(candidate: PullbackCandidate) -> bool:
@@ -188,7 +182,9 @@ class CP4TriggerEngine:
             return None
 
         ep = calculate_early_entry_from_5m(candidate, candles_5m, price)
-        if ep is None or not math.isfinite(ep) or ep > 0.45:
+        # Early-entry remains calculated and available for diagnostics, but
+        # the former <= 0.45 threshold is no longer a hard signal veto.
+        if ep is None or not math.isfinite(ep):
             return None
 
         signal = Signal(
