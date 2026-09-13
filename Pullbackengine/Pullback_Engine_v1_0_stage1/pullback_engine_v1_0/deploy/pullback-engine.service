@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/PullbackEngine/Pullbackengine/Pullback_Engine_v1_0_stage1/pullback_engine_v1_0
-ExecStart=/home/ubuntu/PullbackEngine/.venv/bin/python run_cp7.py
-Restart=always
+ExecStart=/home/ubuntu/PullbackEngine/.venv/bin/python run_service.py
+Restart=on-failure
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
 
