@@ -1,0 +1,16 @@
+[Unit]
+Description=Pullback Engine v1.0 — CP7 Integration Supervisor
+After=network-online.target psygrid.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PullbackEngine/Pullbackengine/Pullback_Engine_v1_0_stage1/pullback_engine_v1_0
+ExecStart=/home/ubuntu/PullbackEngine/.venv/bin/python run_cp7.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
