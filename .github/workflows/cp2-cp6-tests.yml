@@ -28,7 +28,7 @@ jobs:
         run: python -m pytest -q tests
       - name: Compile and smoke-run CP7 launcher
         run: |
-          python -m py_compile pullback_engine/cp7.py run_cp7.py
+          python -m py_compile pullback_engine/cp7.py run_cp7.py run_service.py
           set +e
           timeout 30s python run_cp7.py
           status=$?
