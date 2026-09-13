@@ -112,9 +112,14 @@ jobs:
                       'Psygrid readiness failed during live session: '
                       f"stock_count={ready.get('stock_count')!r}, subscribed_count={ready.get('subscribed_count')!r}"
                   )
-              curl -fsS --max-time 10 http://127.0.0.1:10000/public/live-a.json -o /tmp/pullback-psygrid-live-a.json
-              curl -fsS --max-time 10 http://127.0.0.1:10000/public/nifty.json -o /tmp/pullback-psygrid-nifty.json
-              "$APP_DIR/.venv/bin/python" - <<'PY'
+
+              print('Live session detected; validating 45-stock shard + NIFTY')
+          PY
+
+          if [ "$session_status" != "CLOSED" ]; then
+            curl -fsS --max-time 10 http://127.0.0.1:10000/public/live-a.json -o /tmp/pullback-psygrid-live-a.json
+            curl -fsS --max-time 10 http://127.0.0.1:10000/public/nifty.json -o /tmp/pullback-psygrid-nifty.json
+            "$APP_DIR/.venv/bin/python" - <<'PY'
           import json
           from pathlib import Path
 
