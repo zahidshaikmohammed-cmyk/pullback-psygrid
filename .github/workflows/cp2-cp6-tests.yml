@@ -81,59 +81,40 @@ jobs:
 
           curl -sS --max-time 10 http://127.0.0.1:10000/ -o /tmp/pullback-psygrid-root.json
           curl -sS --max-time 10 http://127.0.0.1:10000/ready -o /tmp/pullback-psygrid-ready.json
-          "$APP_DIR/.venv/bin/python" - <<'PY'
-          import json
-          from pathlib import Path
 
-          root = json.loads(Path('/tmp/pullback-psygrid-root.json').read_text())
-          ready = json.loads(Path('/tmp/pullback-psygrid-ready.json').read_text())
+          ROOT_SERVICE=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-root.json')).get('service',''))")
+          ROOT_UNIVERSE=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-root.json')).get('universe_size',''))")
+          READY_SERVICE=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('service',''))")
+          SESSION_STATUS=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('session_status',''))")
+          FEED_STATUS=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('feed_status',''))")
+          STOCK_COUNT=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('stock_count',''))")
+          SUBSCRIBED_COUNT=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('subscribed_count',''))")
 
-          if root.get('service') != 'PSYGRID':
-              raise SystemExit(f"Psygrid root contract failed: service={root.get('service')!r}")
-          if root.get('universe_size') != 450:
-              raise SystemExit(f"Psygrid root contract failed: universe_size={root.get('universe_size')!r}")
-          if ready.get('service') != 'PSYGRID':
-              raise SystemExit(f"Psygrid readiness failed: service={ready.get('service')!r}")
+          if [ "$ROOT_SERVICE" != "PSYGRID" ]; then
+            echo "Psygrid root contract failed: service=$ROOT_SERVICE"
+            exit 1
+          fi
+          if [ "$ROOT_UNIVERSE" != "450" ]; then
+            echo "Psygrid root contract failed: universe_size=$ROOT_UNIVERSE"
+            exit 1
+          fi
+          if [ "$READY_SERVICE" != "PSYGRID" ]; then
+            echo "Psygrid readiness failed: service=$READY_SERVICE"
+            exit 1
+          fi
 
-          print(
-              'Psygrid readiness: '
-              f"session={ready.get('session_status')!r}, "
-              f"feed={ready.get('feed_status')!r}, "
-              f"stocks={ready.get('stock_count')!r}, "
-              f"subscribed={ready.get('subscribed_count')!r}"
-          )
+          echo "Psygrid readiness: session=$SESSION_STATUS, feed=$FEED_STATUS, stocks=$STOCK_COUNT, subscribed=$SUBSCRIBED_COUNT"
 
-          session_status = ready.get('session_status')
-          if session_status == 'CLOSED':
-              print('Psygrid contract check: PASS (market CLOSED; live endpoints are not required to contain live stocks)')
-          else:
-              if ready.get('stock_count') != 450 or ready.get('subscribed_count') != 450:
-                  raise SystemExit(
-                      'Psygrid readiness failed during live session: '
-                      f"stock_count={ready.get('stock_count')!r}, subscribed_count={ready.get('subscribed_count')!r}"
-                  )
-
-              print('Live session detected; validating 45-stock shard + NIFTY')
-          PY
-
-          if [ "$session_status" != "CLOSED" ]; then
+          if [ "$SESSION_STATUS" = "CLOSED" ]; then
+            echo "Psygrid contract check: PASS (market CLOSED; live endpoints are not required to contain live stocks)"
+          else
+            if [ "$STOCK_COUNT" != "450" ] || [ "$SUBSCRIBED_COUNT" != "450" ]; then
+              echo "Psygrid readiness failed during live session: stock_count=$STOCK_COUNT, subscribed_count=$SUBSCRIBED_COUNT"
+              exit 1
+            fi
             curl -fsS --max-time 10 http://127.0.0.1:10000/public/live-a.json -o /tmp/pullback-psygrid-live-a.json
             curl -fsS --max-time 10 http://127.0.0.1:10000/public/nifty.json -o /tmp/pullback-psygrid-nifty.json
-            "$APP_DIR/.venv/bin/python" - <<'PY'
-          import json
-          from pathlib import Path
-
-          stocks = json.loads(Path('/tmp/pullback-psygrid-live-a.json').read_text())
-          nifty = json.loads(Path('/tmp/pullback-psygrid-nifty.json').read_text())
-
-          if not isinstance(stocks.get('stocks'), dict):
-              raise SystemExit('Psygrid live-a contract failed: stocks is not an object')
-          if len(stocks['stocks']) != 45:
-              raise SystemExit(f"Psygrid live-a contract failed: {len(stocks['stocks'])} stocks")
-          if nifty.get('symbol') != 'NIFTY':
-              raise SystemExit('Psygrid NIFTY contract failed')
-          print('Psygrid contract check: PASS (45-stock live shard + NIFTY)')
-          PY
+            "$APP_DIR/.venv/bin/python" -c "import json; s=json.load(open('/tmp/pullback-psygrid-live-a.json')); n=json.load(open('/tmp/pullback-psygrid-nifty.json')); assert isinstance(s.get('stocks'),dict), 'stocks is not an object'; assert len(s['stocks'])==45, f\"{len(s['stocks'])} stocks\"; assert n.get('symbol')=='NIFTY', 'NIFTY contract failed'; print('Psygrid contract check: PASS (45-stock live shard + NIFTY)')"
           fi
 
           sudo cp "$SOURCE_DIR/deploy/pullback-engine.service" /etc/systemd/system/pullback-engine.service
