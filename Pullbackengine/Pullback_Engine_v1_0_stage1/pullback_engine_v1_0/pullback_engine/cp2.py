@@ -5,12 +5,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping
 from urllib.request import Request, urlopen
-from .core import Candle, IST, validate_candles
+from .core import Candle, IST, parse_timestamp, validate_candles
 
 STOCK_SHARDS = tuple("abcdefghij")
 EXPECTED_STOCKS_PER_SHARD = 45
 EXPECTED_STOCKS = 450
 NIFTY_NAME = "NIFTY"
+DEFAULT_STALE_AFTER_SECONDS = 180.0
 
 ENDPOINTS = {
     s: f"http://140.245.226.102:10000/public/live-{s}.json"
@@ -38,6 +39,7 @@ class StockData:
     stale: bool = False
     healthy: bool = False
     last_timestamp: datetime | None = None
+    feed_timestamp: datetime | None = None
 
 
 @dataclass
@@ -82,7 +84,7 @@ class CP2DataEngine:
         endpoint_urls: Mapping[str, str] | None = None,
         nifty_url: str = NIFTY_URL,
         timeout_seconds: float = 8.0,
-        stale_after_seconds: float = 90.0,
+        stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
     ):
         self.endpoint_urls = dict(endpoint_urls or ENDPOINTS)
         self.nifty_url = nifty_url
@@ -173,7 +175,28 @@ class CP2DataEngine:
 
             stock.last_timestamp = valid[-1].timestamp
 
-            age = (now - stock.last_timestamp).total_seconds()
+            # Psygrid's LTP timestamp represents live feed freshness. A stock
+            # can legitimately have no new trade candle for a while (illiquid
+            # names), so candle age alone must not classify its live feed as
+            # stale. Use the freshest trustworthy timestamp available.
+            raw_ltp_timestamp = item.get("ltp_timestamp")
+            if raw_ltp_timestamp is not None:
+                try:
+                    stock.feed_timestamp = parse_timestamp(raw_ltp_timestamp)
+                except Exception as exc:
+                    stock.errors.append(
+                        f"ltp_timestamp:{type(exc).__name__}:{exc}"
+                    )
+
+            freshness_timestamp = max(
+                ts
+                for ts in (stock.last_timestamp, stock.feed_timestamp)
+                if ts is not None
+            )
+            age = max(
+                0.0,
+                (now - freshness_timestamp).total_seconds(),
+            )
 
             stock.stale = age > self.stale_after_seconds
 
