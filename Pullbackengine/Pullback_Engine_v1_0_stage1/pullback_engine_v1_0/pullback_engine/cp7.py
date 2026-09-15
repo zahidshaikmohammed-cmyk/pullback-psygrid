@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from .core import IST, MARKET_END
@@ -40,7 +41,15 @@ class CP7IntegrationEngine:
         engine: CP5ContinuousEngine | None = None,
         output: CP6OutputSystem | None = None,
     ) -> None:
-        self.engine = engine or CP5ContinuousEngine()
+        if engine is None:
+            state_path = os.environ.get("PULLBACK_ENGINE_STATE_PATH")
+            self.engine = (
+                CP5ContinuousEngine(state_path=state_path)
+                if state_path
+                else CP5ContinuousEngine()
+            )
+        else:
+            self.engine = engine
         self.output = output or CP6OutputSystem()
         self.running = False
         self.last_cycle: CP7Cycle | None = None
