@@ -436,6 +436,45 @@ def test_stale_stock_isolated(
     assert not cycle.stocks["OLD"].healthy
 
 
+def test_fresh_ltp_prevents_false_stale_on_sparse_trading_stock(
+    monkeypatch,
+):
+    old = candle(
+        "2026-09-12T11:50:00+05:30"
+    )
+    response = TransportResult(
+        "a",
+        "a",
+        {
+            "stocks": {
+                "ILLIQUID": {
+                    "ltp_timestamp": "2026-09-12T11:59:30+05:30",
+                    "1m": [old],
+                }
+            }
+        },
+        None,
+        1,
+    )
+
+    cycle = run_engine(
+        monkeypatch,
+        {"a": response},
+        TransportResult(
+            "NIFTY",
+            "n",
+            nifty(),
+            None,
+            1,
+        ),
+    )
+
+    stock = cycle.stocks["ILLIQUID"]
+    assert stock.feed_timestamp is not None
+    assert stock.stale is False
+    assert stock.healthy is True
+
+
 def test_engine_health_never_reports_global_stop_for_local_failures(
     monkeypatch,
 ):
