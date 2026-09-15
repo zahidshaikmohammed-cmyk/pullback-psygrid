@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 from pullback_engine.core import IST
 from pullback_engine.dashboard import DASHBOARD_PORT, DashboardState
@@ -25,3 +26,24 @@ def test_dashboard_state_waiting_is_market_aware():
 
 def test_dashboard_port_is_separate_from_psygrid():
     assert DASHBOARD_PORT == 10001
+
+
+def test_dashboard_reports_cp5_cycle_errors():
+    state = DashboardState()
+    cp2 = SimpleNamespace(healthy_stock_count=450, expected_stock_count=450, stale_stock_count=0)
+    cp5 = SimpleNamespace(
+        cp2_cycle=cp2,
+        candidates=[],
+        monitoring={},
+        new_signals=[],
+        errors=["worker:RuntimeError:boom"],
+        report=None,
+    )
+    cycle = SimpleNamespace(
+        cp5_cycle=cp5,
+        timestamp=datetime(2026, 9, 15, 10, 0, tzinfo=IST),
+        integration_errors=(),
+        healthy=False,
+    )
+    state.update(cycle)
+    assert state.snapshot()["runtime_errors"] == 1
