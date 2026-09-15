@@ -16,7 +16,11 @@ def candles_from_closes(closes: list[float]) -> list[Candle]:
 
 
 def test_pullback_sequences_keep_one_leg_and_deeper_two_leg(monkeypatch):
-    candles = candles_from_closes(list(range(100, 125)))
+    closes = list(range(100, 125))
+    closes[11] = 95
+    closes[12] = 105
+    closes[16] = 90
+    candles = candles_from_closes(closes)
     impulse = Impulse("LONG", 2, 8, 18.0, 2.0, 6, 0.18)
     monkeypatch.setattr(cp3, "confirmed_pivots", lambda *args, **kwargs: ([8, 12], [2, 11, 16]))
     sequences = CP3PullbackHunter._pullback_sequences(candles, impulse, len(candles) - 1)
