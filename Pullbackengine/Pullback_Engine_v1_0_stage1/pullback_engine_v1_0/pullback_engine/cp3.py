@@ -86,7 +86,6 @@ class CP3PullbackHunter:
 
     def __init__(self) -> None:
         self.running = True
-        self._sequence_by_key: dict[tuple[str, str, datetime, datetime, str, datetime], int] = {}
         self.last_cycle: CP3Cycle | None = None
 
     @staticmethod
@@ -131,14 +130,13 @@ class CP3PullbackHunter:
             "regime_confirmation": 1.0 if regime is True else 0.0 if regime is False else None,
         }
 
-    def _make_candidate(self, symbol: str, direction: str, candles: Sequence[Candle], impulse: Impulse, pullback: PullbackAnalysis | None, state: str, current_index: int, nifty_map: Mapping[datetime, bool], trend_map: Sequence[bool | None], pullback_type: str = "ONE_LEG") -> PullbackCandidate:
+    @staticmethod
+    def _make_candidate(symbol: str, direction: str, candles: Sequence[Candle], impulse: Impulse, pullback: PullbackAnalysis | None, state: str, current_index: int, nifty_map: Mapping[datetime, bool], trend_map: Sequence[bool | None], pullback_type: str = "ONE_LEG", sequence: int = 1) -> PullbackCandidate:
         now = candles[current_index].timestamp
         regime, trend = nifty_map.get(now), trend_map[current_index]
-        end_ts = candles[pullback.pullback_end_index].timestamp if pullback is not None else candles[impulse.impulse_high_index].timestamp
-        key = (symbol, direction, candles[impulse.impulse_low_index].timestamp, candles[impulse.impulse_high_index].timestamp, pullback_type, end_ts)
-        seq = self._sequence_by_key.setdefault(key, 1)
-        setup_id = f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d}-{seq:03d}"
-        quality = self._quality(impulse, pullback, candles[current_index].close, trend, regime) if pullback else {}
+        end = pullback.pullback_end_index if pullback is not None else impulse.impulse_high_index
+        setup_id = f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d-%H%M}-{sequence:03d}"
+        quality = CP3PullbackHunter._quality(impulse, pullback, candles[current_index].close, trend, regime) if pullback else {}
         return PullbackCandidate(symbol=symbol, setup_id=setup_id, direction=direction, state=state, created_at=candles[impulse.impulse_low_index].timestamp, updated_at=now, impulse=impulse, pullback=pullback, current_close=candles[current_index].close, nifty_regime=regime, stock_trend=trend, quality=quality, pullback_type=pullback_type)
 
     @staticmethod
@@ -165,10 +163,10 @@ class CP3PullbackHunter:
 
     @staticmethod
     def _pullback_sequences(candles: Sequence[Candle], impulse: Impulse, through_index: int) -> list[tuple[str, int]]:
-        """Return every confirmed one-leg and extending two-leg pullback endpoint."""
         highs, lows = confirmed_pivots(candles, through_index=through_index)
-        counter = [p for p in (lows if impulse.direction == "LONG" else highs) if (impulse.impulse_high_index if impulse.direction == "LONG" else impulse.impulse_low_index) < p <= through_index - 3]
-        separator = [p for p in (highs if impulse.direction == "LONG" else lows) if (impulse.impulse_high_index if impulse.direction == "LONG" else impulse.impulse_low_index) < p <= through_index - 3]
+        origin = impulse.impulse_high_index if impulse.direction == "LONG" else impulse.impulse_low_index
+        counter = [p for p in (lows if impulse.direction == "LONG" else highs) if origin < p <= through_index - 3]
+        separator = [p for p in (highs if impulse.direction == "LONG" else lows) if origin < p <= through_index - 3]
         if not counter:
             return []
         out: list[tuple[str, int]] = [("ONE_LEG", counter[0])]
@@ -228,20 +226,22 @@ class CP3PullbackHunter:
             bull_trend, bear_trend = self._trend_map(candles)
             bullish, bearish = self._find_latest_impulses(candles, through)
             candidates: list[PullbackCandidate] = []
+            sequence = 0
             for impulse in [*bullish, *bearish]:
                 sequences = self._pullback_sequences(candles, impulse, through)
                 if not sequences:
-                    candidates.append(self._make_candidate(stock.symbol, impulse.direction, candles, impulse, None, STATE_IMPULSE, through, nifty_bull if impulse.direction == "LONG" else nifty_bear, bull_trend if impulse.direction == "LONG" else bear_trend))
+                    sequence += 1
+                    candidates.append(self._make_candidate(stock.symbol, impulse.direction, candles, impulse, None, STATE_IMPULSE, through, nifty_bull if impulse.direction == "LONG" else nifty_bear, bull_trend if impulse.direction == "LONG" else bear_trend, "ONE_LEG", sequence))
                     continue
                 for pb_type, pb in sequences:
                     analysis = self._pullback_analysis(candles, impulse, pb)
                     if analysis is None:
                         continue
+                    sequence += 1
                     regime_map = nifty_bull if impulse.direction == "LONG" else nifty_bear
                     trend_map = bull_trend if impulse.direction == "LONG" else bear_trend
-                    trend = trend_map[through]
-                    state = STATE_ARMED if candles[through].close <= PRICE_MAX and trend is True else STATE_QUALIFIED
-                    candidates.append(self._make_candidate(stock.symbol, impulse.direction, candles, impulse, analysis, state, through, regime_map, trend_map, pb_type))
+                    state = STATE_ARMED if candles[through].close <= PRICE_MAX and trend_map[through] is True else STATE_QUALIFIED
+                    candidates.append(self._make_candidate(stock.symbol, impulse.direction, candles, impulse, analysis, state, through, regime_map, trend_map, pb_type, sequence))
             return CP3StockResult(stock.symbol, candles, candidates, [])
         except Exception as exc:
             return CP3StockResult(stock.symbol, locals().get("candles", []), [], [f"stock:{type(exc).__name__}:{exc}"])
