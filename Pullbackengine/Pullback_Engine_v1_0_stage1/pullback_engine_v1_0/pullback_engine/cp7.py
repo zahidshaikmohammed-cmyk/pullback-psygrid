@@ -9,6 +9,7 @@ from typing import Any
 from .core import IST, MARKET_END
 from .cp5 import CP5ContinuousEngine, CP5Cycle
 from .cp6 import CP6OutputSystem, CP6Snapshot
+from .cp2_resilient import ResilientCP2DataEngine
 
 
 @dataclass(frozen=True)
@@ -44,9 +45,14 @@ class CP7IntegrationEngine:
         if engine is None:
             state_path = os.environ.get("PULLBACK_ENGINE_STATE_PATH")
             self.engine = (
-                CP5ContinuousEngine(state_path=state_path)
+                CP5ContinuousEngine(
+                    data_engine=ResilientCP2DataEngine(),
+                    state_path=state_path,
+                )
                 if state_path
-                else CP5ContinuousEngine()
+                else CP5ContinuousEngine(
+                    data_engine=ResilientCP2DataEngine(),
+                )
             )
         else:
             self.engine = engine
