@@ -9,18 +9,26 @@ NOW = datetime(2026, 9, 16, 10, 0, tzinfo=IST)
 
 
 def cycle_with_count(count: int) -> CP2Cycle:
-    endpoints = {
-        shard: EndpointData(
+    remaining = count
+    endpoints = {}
+    for shard in STOCK_SHARDS:
+        shard_count = min(45, remaining)
+        remaining -= shard_count
+        endpoints[shard] = EndpointData(
             name=shard,
             url=shard,
-            stock_count=45 if shard < "h" else max(0, count - 7 * 45),
+            stock_count=shard_count,
             symbols=[],
             stocks={},
-            error=None if shard < "h" else (None if count == 450 else "partial"),
-            healthy=count == 450,
+            error=None if shard_count == 45 else "partial",
+            healthy=shard_count == 45,
         )
-        for shard in STOCK_SHARDS
-    }
+
+    if count == 450:
+        for endpoint in endpoints.values():
+            endpoint.error = None
+            endpoint.healthy = True
+
     stocks = {
         f"S{i:03d}": StockData(
             symbol=f"S{i:03d}",
