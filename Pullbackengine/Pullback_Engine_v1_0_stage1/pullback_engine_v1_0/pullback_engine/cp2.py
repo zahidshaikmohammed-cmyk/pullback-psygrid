@@ -35,17 +35,19 @@ class TransportResult:
 
 @dataclass
 class StockData:
+    # Keep the original positional field order: CP3/CP4 tests and integration
+    # code construct StockData positionally. New v4 metadata is appended.
     symbol: str
     endpoint: str
-    security_id: str | None = None
-    previous_close: float | None = None
-    today_open: float | None = None
     candles_1m: list[Candle] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     stale: bool = False
     healthy: bool = False
     last_timestamp: datetime | None = None
     feed_timestamp: datetime | None = None
+    security_id: str | None = None
+    previous_close: float | None = None
+    today_open: float | None = None
 
 
 @dataclass
@@ -181,8 +183,9 @@ class CP2DataEngine:
 
             stock.last_timestamp = valid[-1].timestamp
 
-            # The v4 example does not expose ltp_timestamp. For this contract
-            # the newest 1-minute candle is the live freshness timestamp.
+            # v4 normally has no ltp_timestamp; when present, it is an
+            # additional live freshness signal. Otherwise the latest candle
+            # is the freshness timestamp.
             raw_ltp_timestamp = item.get("ltp_timestamp")
             if raw_ltp_timestamp is not None:
                 try:
@@ -202,8 +205,8 @@ class CP2DataEngine:
             if stock.stale:
                 stock.errors.append(f"stale:{age:.1f}s")
 
-            # Missing optional metadata is diagnostic only; OHLCV validity and
-            # freshness determine whether the stock can enter the scan.
+            # Metadata is diagnostic; OHLCV validity and freshness determine
+            # health so a malformed optional field cannot kill a live stock.
             stock.healthy = not stock.stale and bool(valid)
         except Exception as exc:
             stock.errors.append(f"stock:{type(exc).__name__}:{exc}")
