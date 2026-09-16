@@ -73,8 +73,17 @@ class DashboardState:
             self.developing = sum(c.state == "IMPULSE_DETECTED" for c in candidates)
             self.qualified = sum(c.state == "QUALIFIED_PULLBACK" for c in candidates)
             self.armed = sum(c.state == "TRIGGER_ARMED" for c in candidates)
+
             monitoring = dict(getattr(cp5, "monitoring", {}) or {})
-            self.active_monitors = sum(bool(getattr(s, "active", False)) for s in monitoring.values())
+            session_date = cycle.timestamp.astimezone(IST).date()
+            current_monitors = {
+                setup_id: state
+                for setup_id, state in monitoring.items()
+                if getattr(state, "signal_timestamp", None) is not None
+                and getattr(state, "signal_timestamp").astimezone(IST).date() == session_date
+            }
+            self.active_monitors = sum(bool(getattr(s, "active", False)) for s in current_monitors.values())
+
             signals = list(getattr(cp5, "new_signals", []) or [])
             self.new_signals = len(signals)
             cycle_errors = list(getattr(cp5, "errors", []) or [])
@@ -105,7 +114,7 @@ class DashboardState:
                     "setup_id": s.setup_id,
                     "active": bool(s.active),
                 }
-                for s in monitoring.values()
+                for s in current_monitors.values()
             ]
             for signal in signals:
                 item = {
