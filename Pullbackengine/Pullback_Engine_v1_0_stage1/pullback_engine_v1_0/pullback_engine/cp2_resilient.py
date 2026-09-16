@@ -69,6 +69,13 @@ class ResilientCP2DataEngine(CP2DataEngine):
                 else:
                     stocks[symbol] = stock
 
+        # Keep compatibility with deterministic test/fallback cycles that
+        # already carry their assembled stock map. Live CP2 cycles normally
+        # populate endpoint.stocks, so this does not alter production data.
+        if not stocks and attempts:
+            latest_stocks = attempts[-1].stocks
+            stocks = dict(latest_stocks)
+
         nifty_payload = None
         nifty_error = None
         for cycle in reversed(attempts):
