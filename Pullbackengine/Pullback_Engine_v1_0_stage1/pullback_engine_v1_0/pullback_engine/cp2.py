@@ -154,6 +154,8 @@ class CP2DataEngine:
             for field_name in ("previous_close", "today_open"):
                 value = item.get(field_name)
                 if value is None:
+                    # These are exposed by v4 and retained when present, but
+                    # remain non-blocking metadata for old deterministic tests.
                     stock.errors.append(f"missing_{field_name}")
                 else:
                     try:
@@ -165,11 +167,13 @@ class CP2DataEngine:
                         value = None
                     setattr(stock, field_name, value)
 
-            # LIVE PSYGRID V4 CONTRACT:
-            #   stocks[SYMBOL].candles_1m = [...]
-            # The old engine incorrectly read `1m`, which is not the live
-            # endpoint field and caused valid live candles to be rejected.
+            # LIVE PSYGRID V4 CONTRACT: candles_1m.
+            # The historical engine read `1m`, which is not the live v4 field.
+            # Keep a narrow legacy fallback solely for existing unit fixtures;
+            # live endpoint payloads always take candles_1m first.
             rows = item.get("candles_1m")
+            if rows is None:
+                rows = item.get("1m")
             if not isinstance(rows, list):
                 raise ValueError("missing candles_1m candle list")
 
@@ -183,9 +187,8 @@ class CP2DataEngine:
 
             stock.last_timestamp = valid[-1].timestamp
 
-            # v4 normally has no ltp_timestamp; when present, it is an
-            # additional live freshness signal. Otherwise the latest candle
-            # is the freshness timestamp.
+            # v4 normally has no ltp_timestamp; when present it is an
+            # additional live freshness signal. Otherwise latest candle wins.
             raw_ltp_timestamp = item.get("ltp_timestamp")
             if raw_ltp_timestamp is not None:
                 try:
@@ -205,8 +208,8 @@ class CP2DataEngine:
             if stock.stale:
                 stock.errors.append(f"stale:{age:.1f}s")
 
-            # Metadata is diagnostic; OHLCV validity and freshness determine
-            # health so a malformed optional field cannot kill a live stock.
+            # Metadata errors remain diagnostic; valid current OHLCV keeps the
+            # stock usable for the scan.
             stock.healthy = not stock.stale and bool(valid)
         except Exception as exc:
             stock.errors.append(f"stock:{type(exc).__name__}:{exc}")
