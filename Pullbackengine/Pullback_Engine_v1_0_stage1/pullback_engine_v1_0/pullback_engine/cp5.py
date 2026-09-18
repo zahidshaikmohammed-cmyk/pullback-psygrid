@@ -174,17 +174,48 @@ class CP5ContinuousEngine:
             self.runtime_errors.append(f"state_load:{type(exc).__name__}:{exc}")
 
     def _ensure_market_session(self, session_date: str) -> None:
-        """Never carry yesterday's signals/monitors into today's session."""
-        if self._session_initialized and self._state_session_date == session_date:
-            return
+        """Start every IST trading day with only that day's live state.
 
+        State files can outlive a process restart, so the persisted session
+        marker alone is not trusted. Any loaded monitor from another calendar
+        day invalidates the persisted monitoring/alert cache for the new run.
+        """
         with self._state_lock:
-            if self._state_session_date != session_date:
+            loaded_dates = {
+                state.signal_timestamp.astimezone(IST).date().isoformat()
+                for state in self.monitoring.values()
+                if state.signal_timestamp is not None
+            }
+            new_day = self._state_session_date != session_date
+            contaminated = bool(loaded_dates - {session_date})
+            if new_day or contaminated:
                 self.monitoring.clear()
                 self.alerted_setup_ids.clear()
                 self.last_report_slot = None
                 self._state_session_date = session_date
             self._session_initialized = True
+
+    def _dedupe_current_signals(self, signals: list[Signal]) -> list[Signal]:
+        """Permit at most one active setup per symbol/direction.
+
+        A pullback may generate a new signal after the previous one has
+        completed or invalidated. It must not create a second live monitor
+        every minute while the same structural episode is still active.
+        """
+        active_keys = {
+            (state.symbol, state.direction)
+            for state in self.monitoring.values()
+            if state.active
+        }
+        accepted: list[Signal] = []
+        cycle_keys: set[tuple[str, str]] = set()
+        for signal in sorted(signals, key=lambda s: s.signal_timestamp):
+            key = (signal.symbol, signal.direction)
+            if key in active_keys or key in cycle_keys:
+                continue
+            accepted.append(signal)
+            cycle_keys.add(key)
+        return accepted
 
     def _save_state(self) -> None:
         payload = {
@@ -442,6 +473,7 @@ class CP5ContinuousEngine:
 
         cp2_cycle = await self.data_engine.cycle(now=ts)
         stock_results, candidates, new_signals, errors = await self._process_universe(cp2_cycle, ts)
+        new_signals = self._dedupe_current_signals(new_signals)
 
         for signal in new_signals:
             if signal.setup_id not in self.alerted_setup_ids:
