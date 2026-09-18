@@ -212,7 +212,7 @@ class CP3PullbackHunter:
         now = candles[current_index].timestamp
         regime, trend = nifty_map.get(now), trend_map[current_index]
         if pullback is None:
-            setup_id = f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d-%H%M}-{impulse.impulse_low_index}-{impulse.impulse_high_index}-IMPULSE"
+            setup_id = f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d-%H%M}-{impulse.impulse_low_index}-{impulse.impulse_high_index}-{pullback_type}"
         else:
             setup_id = (
                 f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d-%H%M}-"
