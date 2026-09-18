@@ -118,13 +118,13 @@ class CP5ContinuousEngine:
         ]
         for name in sorted(endpoints):
             parts.append(f"{name.upper()}={'FAIL' if getattr(endpoints[name], 'error', None) else 'OK'}")
-        return "PANEL 1 — ENGINE | " + " ".join(parts)
+        return "PANEL 1 — ENGINE / MARKET | " + " ".join(parts)
 
     @staticmethod
     def format_signal_panel(cycle: Any) -> str:
         monitoring = getattr(cycle, "monitoring", {}) or {}
         active = [s for s in monitoring.values() if getattr(s, "active", False)]
-        lines = [f"Active triggered setups: {len(active)}"]
+        lines = ["PANEL 3 — SIGNAL / MONITOR", f"Active triggered setups: {len(active)}"]
         for state in active:
             lines.append(f"{state.symbol} | {state.direction} | {state.status} | {state.setup_id}")
         return "\n".join(lines)
@@ -139,6 +139,8 @@ class CP5ContinuousEngine:
 
     @staticmethod
     def format_cycle_panel(report: Any) -> str:
+        if report is None:
+            return "PANEL 4 — 15-MINUTE CYCLE | No report yet"
         f = report.funnel
         return (
             f"{report.timestamp.isoformat()} | Universe {report.universe} | "
