@@ -327,6 +327,12 @@ class CP3PullbackHunter:
                     analysis = self._pullback_analysis(candles, impulse, pb)
                     if analysis is None:
                         continue
+                    # A pullback is actionable only while it is still the
+                    # current structure. Once its confirmed extreme is more
+                    # than 30 minutes behind the current completed 5m bar,
+                    # it is historical context, not a fresh setup.
+                    if through - pb > 6:
+                        continue
                     sequence += 1
                     regime_map = nifty_bull if impulse.direction == "LONG" else nifty_bear
                     trend_map = bull_trend if impulse.direction == "LONG" else bear_trend
