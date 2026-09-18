@@ -212,11 +212,11 @@ class CP3PullbackHunter:
         now = candles[current_index].timestamp
         regime, trend = nifty_map.get(now), trend_map[current_index]
         if pullback is None:
-            setup_id = f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d-%H%M}-{impulse.impulse_low_index}-{impulse.impulse_high_index}"
+            setup_id = f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d-%H%M}-{impulse.impulse_low_index}-{impulse.impulse_high_index}-IMPULSE"
         else:
             setup_id = (
                 f"{symbol}-PB-{candles[impulse.impulse_high_index].timestamp.astimezone(IST):%Y%m%d-%H%M}-"
-                f"{impulse.impulse_low_index}-{impulse.impulse_high_index}-{pullback.pullback_end_index}"
+                f"{impulse.impulse_low_index}-{impulse.impulse_high_index}-{pullback.pullback_end_index}-{pullback_type}"
             )
         quality = CP3PullbackHunter._quality(impulse, pullback, candles[current_index].close, trend, regime) if pullback else {}
         return PullbackCandidate(symbol=symbol, setup_id=setup_id, direction=direction, state=state, created_at=candles[impulse.impulse_low_index].timestamp, updated_at=now, impulse=impulse, pullback=pullback, current_close=candles[current_index].close, nifty_regime=regime, stock_trend=trend, quality=quality, pullback_type=pullback_type)
@@ -256,13 +256,13 @@ class CP3PullbackHunter:
         if not counter:
             return []
         first = counter[0]
-        latest = ("ONE_LEG", first)
+        out: list[tuple[str, int]] = [("ONE_LEG", first)]
         for endpoint in counter[1:]:
             if any(first < p < endpoint for p in separator):
                 extends = candles[endpoint].low < candles[first].low if impulse.direction == "LONG" else candles[endpoint].high > candles[first].high
                 if extends:
-                    latest = ("TWO_LEG", endpoint)
-        return [latest]
+                    out.append(("TWO_LEG", endpoint))
+        return out
 
     @staticmethod
     def _next_pullback_pivot(candles: Sequence[Candle], impulse: Impulse, through_index: int) -> int | None:
@@ -293,9 +293,6 @@ class CP3PullbackHunter:
         ep_long = (candles[pb].close - candles[pb].low) / dl if dl > 0 else math.nan
         ep_short = (candles[pb].high - candles[pb].close) / ds if ds > 0 else math.nan
         analysis = PullbackAnalysis(start, pb, r, duration, structure, mi, mp, mr, vr, vwap, ep_long, ep_short)
-        score, _classification = CP3PullbackHunter._structure_quality(candles, impulse, analysis)
-        if score < CP3PullbackHunter.MIN_STRUCTURAL_SCORE:
-            return None
         return analysis
 
     def analyze_stock(self, stock: StockData, now: datetime, nifty_bull: Mapping[datetime, bool], nifty_bear: Mapping[datetime, bool]) -> CP3StockResult:
@@ -323,7 +320,9 @@ class CP3PullbackHunter:
                     sequence += 1
                     candidates.append(self._make_candidate(stock.symbol, impulse.direction, candles, impulse, None, STATE_IMPULSE, through, nifty_bull if impulse.direction == "LONG" else nifty_bear, bull_trend if impulse.direction == "LONG" else bear_trend, "ONE_LEG", sequence))
                     continue
-                for pb_type, pb in sequences:
+                # Keep the full anatomy API, but only the latest
+                # structural leg is actionable for live trading.
+                for pb_type, pb in sequences[-1:]:
                     analysis = self._pullback_analysis(candles, impulse, pb)
                     if analysis is None:
                         continue
@@ -332,6 +331,9 @@ class CP3PullbackHunter:
                     # than 30 minutes behind the current completed 5m bar,
                     # it is historical context, not a fresh setup.
                     if through - pb > 6:
+                        continue
+                    score, _classification = self._structure_quality(candles, impulse, analysis)
+                    if score < self.MIN_STRUCTURAL_SCORE:
                         continue
                     sequence += 1
                     regime_map = nifty_bull if impulse.direction == "LONG" else nifty_bear
