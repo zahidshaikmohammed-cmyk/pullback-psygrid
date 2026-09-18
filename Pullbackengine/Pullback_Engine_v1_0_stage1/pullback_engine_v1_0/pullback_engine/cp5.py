@@ -109,6 +109,46 @@ class CP5ContinuousEngine:
         self._load_state()
 
     @staticmethod
+    def format_engine_panel(cycle: Any) -> str:
+        cp2 = getattr(cycle, "cp2_cycle", cycle)
+        endpoints = getattr(cp2, "endpoints", {}) or {}
+        parts = [
+            f"EXPECTED={getattr(cp2, 'expected_stock_count', 450)}",
+            f"STOCKS={len(getattr(cp2, 'stocks', {}) or {})}",
+        ]
+        for name in sorted(endpoints):
+            parts.append(f"{name.upper()}={'FAIL' if getattr(endpoints[name], 'error', None) else 'OK'}")
+        return "PANEL 1 — ENGINE | " + " ".join(parts)
+
+    @staticmethod
+    def format_signal_panel(cycle: Any) -> str:
+        monitoring = getattr(cycle, "monitoring", {}) or {}
+        active = [s for s in monitoring.values() if getattr(s, "active", False)]
+        lines = [f"Active triggered setups: {len(active)}"]
+        for state in active:
+            lines.append(f"{state.symbol} | {state.direction} | {state.status} | {state.setup_id}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_hunter_panel(cycle: Any) -> str:
+        candidates = list(getattr(cycle, "candidates", []) or [])
+        developing = sum(getattr(c, "state", None) == "IMPULSE_DETECTED" for c in candidates)
+        qualified = sum(getattr(c, "state", None) == "QUALIFIED_PULLBACK" for c in candidates)
+        armed = sum(getattr(c, "state", None) == "TRIGGER_ARMED" for c in candidates)
+        return "PANEL 2 — PULLBACK HUNTER\n" f"Developing: {developing}\n" f"Qualified: {qualified}\n" f"Trigger-armed: {armed}"
+
+    @staticmethod
+    def format_cycle_panel(report: Any) -> str:
+        f = report.funnel
+        return (
+            f"{report.timestamp.isoformat()} | Universe {report.universe} | "
+            f"Calculable {report.currently_calculable} | Skipped {report.temporarily_skipped} | "
+            f"{f.price_eligible} price | {f.valid_data} data | {f.impulse} impulse | "
+            f"{f.pullback} pullback | {f.structure} structure | {f.trend} trend | "
+            f"{f.early_entry} early | {f.reacceleration} reaccel | {f.signals} SIGNALS"
+        )
+
+    @staticmethod
     def _default_alert(signal: Signal) -> None:
         try:
             print("\a", end="", flush=True)
@@ -219,7 +259,7 @@ class CP5ContinuousEngine:
 
     def _save_state(self) -> None:
         payload = {
-            "version": 2,
+            "version": 1,
             "session_date": self._state_session_date,
             "alerted_setup_ids": sorted(self.alerted_setup_ids),
             "monitoring": {
@@ -529,5 +569,7 @@ class CP5ContinuousEngine:
             "candidates": len(cycle.candidates) if cycle else 0,
             "new_signals": len(cycle.new_signals) if cycle else 0,
             "active_monitors": sum(s.active for s in self.monitoring.values()),
+            "invalidated_monitors": sum(not s.active for s in self.monitoring.values()),
+            "alerted_setup_ids": len(self.alerted_setup_ids),
             "runtime_errors": len(self.runtime_errors),
         }
