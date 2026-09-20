@@ -94,13 +94,13 @@ jobs:
           STOCK_COUNT=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('stock_count',''))")
           SUBSCRIBED_COUNT=$("$APP_DIR/.venv/bin/python" -c "import json; print(json.load(open('/tmp/pullback-psygrid-ready.json')).get('subscribed_count',''))")
 
-          if [ "$ROOT_SERVICE" != "PSYGRID" ] || [ "$ROOT_UNIVERSE" != "450" ] || [ "$READY_SERVICE" != "PSYGRID" ]; then
+          if [ "$ROOT_SERVICE" != "PSYGRID" ] || [ "$ROOT_UNIVERSE" != "990" ] || [ "$READY_SERVICE" != "PSYGRID" ]; then
             echo "Psygrid contract failed: root_service=$ROOT_SERVICE root_universe=$ROOT_UNIVERSE ready_service=$READY_SERVICE"
             exit 1
           fi
           echo "Psygrid readiness: session=$SESSION_STATUS, feed=$FEED_STATUS, stocks=$STOCK_COUNT, subscribed=$SUBSCRIBED_COUNT"
 
-          if [ "$SESSION_STATUS" != "CLOSED" ] && { [ "$STOCK_COUNT" != "450" ] || [ "$SUBSCRIBED_COUNT" != "450" ]; }; then
+          if [ "$SESSION_STATUS" != "CLOSED" ] && { [ "$STOCK_COUNT" != "990" ] || [ "$SUBSCRIBED_COUNT" != "990" ]; }; then
             echo "Psygrid readiness failed during live session: stock_count=$STOCK_COUNT, subscribed=$SUBSCRIBED_COUNT"
             exit 1
           fi
@@ -125,7 +125,7 @@ jobs:
 
           curl -fsS --max-time 5 http://127.0.0.1:10001/health
           curl -fsS --max-time 5 http://127.0.0.1:10001/api/state >/tmp/pullback-dashboard-state.json
-          "$APP_DIR/.venv/bin/python" -c "import json; d=json.load(open('/tmp/pullback-dashboard-state.json')); assert d.get('service')=='PULLBACK_ENGINE_V1_0'; assert d.get('expected_stocks')==450; print('Pullback dashboard: PASS')"
+          "$APP_DIR/.venv/bin/python" -c "import json; d=json.load(open('/tmp/pullback-dashboard-state.json')); assert d.get('service')=='PULLBACK_ENGINE_V1_0'; assert d.get('expected_stocks')==990; print('Pullback dashboard: PASS')"
           echo 'Pullback Engine service: ACTIVE'
           sudo systemctl --no-pager --full status pullback-engine.service | head -n 25
           REMOTE
