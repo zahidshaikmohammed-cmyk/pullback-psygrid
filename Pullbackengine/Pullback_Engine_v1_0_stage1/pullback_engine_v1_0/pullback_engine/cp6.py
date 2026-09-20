@@ -163,7 +163,7 @@ class CP6OutputSystem:
         snapshot = self.build_snapshot(cycle)
         if clear:
             self._clear_terminal()
-        header = f"{BOLD}{CYAN}PULLBACK ENGINE v1.0 — CP6 OUTPUT SYSTEM{RESET}\n{DIM}450-stock continuous hunter | independent 15-minute reporting{RESET}\n\n"
+        header = f"{BOLD}{CYAN}PULLBACK ENGINE v1.0 — CP6 OUTPUT SYSTEM{RESET}\n{DIM}990-stock continuous hunter | independent 15-minute reporting{RESET}\n\n"
         return header + self._join_panels(snapshot.panel_1.splitlines(), snapshot.panel_2.splitlines()) + "\n\n" + self._join_panels(snapshot.panel_3.splitlines(), snapshot.panel_4.splitlines()) + f"\n\n{DIM}CP6 = display/output only. No strategy decisions are made here.{RESET}\n"
 
     async def run(self, engine: CP5ContinuousEngine) -> None:

@@ -11,7 +11,7 @@ async def main() -> None:
     print("PULLBACK ENGINE v1.0 — CP7 INTEGRATION SUPERVISOR")
     print("=" * 64)
     print("CP7 starting: CP5 runtime + CP6 output, one canonical loop")
-    print("Universe: 450 stocks | Hunter: 10:00 IST | Market end: 15:15 IST")
+    print("Universe: 990 stocks | Hunter: 10:00 IST | Market end: 15:15 IST")
     print("")
     try:
         await engine.run_forever()

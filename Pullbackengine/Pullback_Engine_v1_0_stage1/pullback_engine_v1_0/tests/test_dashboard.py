@@ -9,7 +9,7 @@ def test_dashboard_contract_is_read_only_state_surface():
     state = DashboardState()
     snapshot = state.snapshot()
     assert snapshot["service"] == "PULLBACK_ENGINE_V1_0"
-    assert snapshot["expected_stocks"] == 450
+    assert snapshot["expected_stocks"] == 990
     assert snapshot["signals"] == []
     assert snapshot["events"] == []
 

@@ -15,7 +15,7 @@ async def main() -> None:
     print("Hunter: continuous 1-minute cycles")
     print("Candidate creation: 10:00 IST")
     print("Market end: 15:15 IST")
-    print("Universe: 450 stocks")
+    print("Universe: 990 stocks")
     print("")
 
     try:

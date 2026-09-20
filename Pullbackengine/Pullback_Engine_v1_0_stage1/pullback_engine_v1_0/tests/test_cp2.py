@@ -5,8 +5,7 @@ from zoneinfo import ZoneInfo
 from pullback_engine.cp2 import (
     CP2DataEngine,
     EXPECTED_STOCKS,
-    EXPECTED_STOCKS_PER_SHARD,
-    STOCK_SHARDS,
+    LIVE_NAME,
     TransportResult,
 )
 
@@ -40,7 +39,7 @@ def payload(symbols):
         "service": "PSYGRID",
         "schema_version": "4.0",
         "status": "OK",
-        "universe_size": 450,
+        "universe_size": 990,
         "stock_count": len(symbols),
         "data_policy": "1M_OHLCV_PLUS_PREVIOUS_CLOSE_AND_TODAY_OPEN",
         "synthetic_candles": False,
@@ -60,7 +59,7 @@ def nifty():
     }
 
 
-def run_engine(monkeypatch, responses, nifty_response):
+def run_engine(monkeypatch, responses, nifty_response, expected_stock_count=EXPECTED_STOCKS):
     async def fake_fetch(self):
         return [*responses.values(), nifty_response]
 
@@ -68,20 +67,20 @@ def run_engine(monkeypatch, responses, nifty_response):
     engine = CP2DataEngine(
         endpoint_urls={k: k for k in responses},
         nifty_url="n",
+        expected_stock_count=expected_stock_count,
     )
     return asyncio.run(engine.cycle(NOW))
 
 
-def test_cp2_accepts_live_psygrid_v4_10x45(monkeypatch):
-    responses = {}
-    for idx, shard in enumerate(STOCK_SHARDS):
-        symbols = [f"S{idx:02d}{n:02d}" for n in range(45)]
-        responses[shard] = TransportResult(shard, shard, payload(symbols), None, 1.0)
+def test_cp2_accepts_live_psygrid_v4_single_endpoint_990(monkeypatch):
+    symbols = [f"S{n:04d}" for n in range(EXPECTED_STOCKS)]
+    responses = {LIVE_NAME: TransportResult(LIVE_NAME, LIVE_NAME, payload(symbols), None, 1.0)}
 
     cycle = run_engine(monkeypatch, responses, TransportResult("NIFTY", "n", nifty(), None, 1.0))
 
-    assert len(cycle.endpoints) == 10
-    assert all(v.stock_count == EXPECTED_STOCKS_PER_SHARD for v in cycle.endpoints.values())
+    assert len(cycle.endpoints) == 1
+    assert cycle.endpoints[LIVE_NAME].stock_count == EXPECTED_STOCKS
+    assert cycle.endpoints[LIVE_NAME].error is None
     assert cycle.unique_stock_count == EXPECTED_STOCKS
     assert cycle.healthy_stock_count == EXPECTED_STOCKS
     assert cycle.nifty_error is None
@@ -151,9 +150,9 @@ def test_nifty_schema_is_checked(monkeypatch):
     assert cycle.nifty_error == "NIFTY symbol mismatch"
 
 
-def test_shard_count_mismatch_isolated(monkeypatch):
+def test_universe_count_mismatch_isolated(monkeypatch):
     responses = {"a": TransportResult("a", "a", payload([f"A{i}" for i in range(44)]), None, 1)}
-    cycle = run_engine(monkeypatch, responses, TransportResult("NIFTY", "n", nifty(), None, 1))
+    cycle = run_engine(monkeypatch, responses, TransportResult("NIFTY", "n", nifty(), None, 1), expected_stock_count=45)
     assert cycle.endpoints["a"].error == "universe_count:44!=45"
     assert cycle.unique_stock_count == 44
 

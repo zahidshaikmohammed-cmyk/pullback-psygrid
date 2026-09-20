@@ -11,7 +11,7 @@
 </head>
 <body>
 <div class="wrap">
-<div class="head"><div><div class="title">PULLBACK ENGINE v1.0</div><div class="sub">450-stock continuous hunter · Oracle runtime</div></div><div id="status" class="pill">CONNECTING…</div></div>
+<div class="head"><div><div class="title">PULLBACK ENGINE v1.0</div><div class="sub">990-stock continuous hunter · Oracle runtime</div></div><div id="status" class="pill">CONNECTING…</div></div>
 <div class="grid">
 <div class="card"><div class="label">Engine</div><div id="engine" class="value">—</div></div>
 <div class="card"><div class="label">Scan Coverage</div><div id="coverage" class="value">—</div></div>
@@ -32,7 +32,7 @@
 <div class="card"><h2>📊 Latest 15-minute funnel</h2><div id="report"><div class="empty">No report yet.</div></div></div>
 </div>
 <div class="section card"><h2>📝 Engine events</h2><div id="events"><div class="empty">No events yet.</div></div></div>
-<div class="foot">Read-only operator interface. Every cycle schedules the complete 450-stock universe independently; health/data quality determines whether a stock can advance to signal evaluation.</div>
+<div class="foot">Read-only operator interface. Every cycle schedules the complete 990-stock universe independently; health/data quality determines whether a stock can advance to signal evaluation.</div>
 </div>
 <script>
 const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -40,10 +40,10 @@ function cls(v){return v==='RUNNING'||v==='OPEN'?'good':v==='WAITING'||v==='CLOS
 function render(d){
  $('status').textContent=d.session==='OPEN'?'MARKET OPEN':d.engine; $('status').className='pill '+(d.session==='OPEN'?'live':'');
  $('engine').textContent=d.engine;$('engine').className='value '+cls(d.engine);
- const expected=Number(d.expected_stocks||450), scanned=Number(d.scanned_stocks??0), processed=Number(d.processed_stocks??0), failed=Number(d.processing_failures??0);
+ const expected=Number(d.expected_stocks||990), scanned=Number(d.scanned_stocks??0), processed=Number(d.processed_stocks??0), failed=Number(d.processing_failures??0);
  $('coverage').textContent=`${scanned}/${expected}`;$('coverage').className='value '+(scanned===expected&&processed===expected?'good':'warn');
  $('stocks').textContent=`${d.healthy_stocks}/${expected}`;$('qualified').textContent=d.qualified;$('armed').textContent=d.armed;$('monitors').textContent=d.active_monitors;$('newSignals').textContent=d.new_signals;$('stale').textContent=d.stale_stocks;
- $('coverageDetail').innerHTML=`<div class="badge"><b>${scanned}</b> scheduled</div><div class="badge"><b>${processed}</b> processed</div><div class="badge"><b>${d.healthy_stocks}</b> healthy</div><div class="badge"><b>${Math.max(0,expected-d.healthy_stocks)}</b> data/health excluded</div><div class="badge"><b>${failed}</b> worker failures</div><div class="badge ${scanned===expected&&processed===expected?'coverage-ok':'coverage-warn'}"><b>${scanned===expected&&processed===expected?'FULL 450/450':'INCOMPLETE'}</b> cycle coverage</div>`;
+ $('coverageDetail').innerHTML=`<div class="badge"><b>${scanned}</b> scheduled</div><div class="badge"><b>${processed}</b> processed</div><div class="badge"><b>${d.healthy_stocks}</b> healthy</div><div class="badge"><b>${Math.max(0,expected-d.healthy_stocks)}</b> data/health excluded</div><div class="badge"><b>${failed}</b> worker failures</div><div class="badge ${scanned===expected&&processed===expected?'coverage-ok':'coverage-warn'}"><b>${scanned===expected&&processed===expected?`FULL ${expected}/${expected}`:'INCOMPLETE'}</b> cycle coverage</div>`;
  $('signals').innerHTML=d.signals.length?d.signals.slice(0,20).map(s=>`<div class="signal ${s.direction==='SHORT'?'short':''}"><div class="sigline"><span class="sym">${esc(s.symbol)} · ${esc(s.direction)}</span><b>₹${Number(s.entry_price).toFixed(2)}</b></div><div class="muted">${new Date(s.signal_timestamp).toLocaleTimeString()} · ${esc(s.setup_id)}</div></div>`).join(''):'<div class="empty">No signals yet.</div>';
  $('candidates').innerHTML=d.candidates_top.length?`<table class="table"><tr><th>Symbol</th><th>Dir</th><th>State</th></tr>${d.candidates_top.map(c=>`<tr><td><b>${esc(c.symbol)}</b></td><td>${esc(c.direction)}</td><td>${esc(c.state)}</td></tr>`).join('')}</table>`:'<div class="empty">No active candidates.</div>';
  $('monitorTable').innerHTML=d.monitors.length?`<table class="table"><tr><th>Symbol</th><th>Dir</th><th>Status</th></tr>${d.monitors.map(m=>`<tr><td><b>${esc(m.symbol)}</b></td><td>${esc(m.direction)}</td><td>${esc(m.status)}</td></tr>`).join('')}</table>`:'<div class="empty">No triggered setups.</div>';

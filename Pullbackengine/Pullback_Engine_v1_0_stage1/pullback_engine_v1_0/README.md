@@ -4,7 +4,7 @@ This package is the first implementation stage of the locked specification.
 
 ## What is implemented here
 
-- ten A–J stock endpoint configuration, 45-stock shards treated as one universe
+- single combined 990-stock endpoint treated as one universe
 - separate NIFTY endpoint
 - concurrent endpoint fetching
 - per-stock fault isolation

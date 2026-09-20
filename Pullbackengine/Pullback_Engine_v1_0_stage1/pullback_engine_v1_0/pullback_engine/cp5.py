@@ -89,12 +89,12 @@ class CP5ContinuousEngine:
         self,
         data_engine: CP2DataEngine | None = None,
         state_path: str | Path = "pullback_state.json",
-        worker_limit: int = 450,
+        worker_limit: int = 990,
         alert_callback: Callable[[Signal], None] | None = None,
     ) -> None:
         self.data_engine = data_engine or CP2DataEngine()
         self.state_path = Path(state_path)
-        self.worker_limit = max(1, min(int(worker_limit), 450))
+        self.worker_limit = max(1, min(int(worker_limit), 990))
         self.alert_callback = alert_callback or self._default_alert
         self.running = True
         self.worker_engines: dict[str, CP4TriggerEngine] = {}
@@ -115,7 +115,7 @@ class CP5ContinuousEngine:
         healthy = getattr(cp2, "healthy_stock_count", None)
         if healthy is None:
             healthy = sum(1 for s in (getattr(cp2, "stocks", {}) or {}).values() if getattr(s, "healthy", False))
-        expected = getattr(cp2, "expected_stock_count", 450)
+        expected = getattr(cp2, "expected_stock_count", 990)
         parts = [
             "Engine: RUNNING",
             f"NIFTY regime data: {'UNAVAILABLE' if getattr(cp2, 'nifty_error', None) else 'AVAILABLE'}",
@@ -578,7 +578,7 @@ class CP5ContinuousEngine:
         cycle = self.last_cycle
         return {
             "engine": "RUNNING" if self.running else "STOPPED",
-            "expected_stocks": cycle.cp2_cycle.expected_stock_count if cycle else 450,
+            "expected_stocks": cycle.cp2_cycle.expected_stock_count if cycle else 990,
             "stocks_in_last_cycle": len(cycle.cp2_cycle.stocks) if cycle else 0,
             "candidates": len(cycle.candidates) if cycle else 0,
             "new_signals": len(cycle.new_signals) if cycle else 0,

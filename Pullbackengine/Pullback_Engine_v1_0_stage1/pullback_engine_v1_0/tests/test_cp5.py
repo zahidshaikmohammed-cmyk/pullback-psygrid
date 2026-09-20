@@ -320,7 +320,7 @@ def test_worker_limit_is_clamped(tmp_path: Path):
     )
 
     assert engine_low.worker_limit == 1
-    assert engine_high.worker_limit == 450
+    assert engine_high.worker_limit == 990
 
 
 def test_single_stock_cycle_preserves_nifty():

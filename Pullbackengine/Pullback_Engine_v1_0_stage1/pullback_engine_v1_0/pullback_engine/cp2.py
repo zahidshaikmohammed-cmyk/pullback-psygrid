@@ -10,15 +10,16 @@ from urllib.request import Request, urlopen
 
 from .core import Candle, IST, parse_timestamp, validate_candles
 
-STOCK_SHARDS = tuple("abcdefghij")
-EXPECTED_STOCKS_PER_SHARD = 45
-EXPECTED_STOCKS = 450
+EXPECTED_STOCKS = 990
 NIFTY_NAME = "NIFTY"
+LIVE_NAME = "LIVE"
 DEFAULT_STALE_AFTER_SECONDS = 180.0
 
+# The full universe is now served from a single combined endpoint instead of
+# the ten 45-stock A-J shards; the fetch/parse pipeline below is endpoint-name
+# agnostic, so this is the only place the transport topology is declared.
 ENDPOINTS = {
-    s: f"http://140.245.226.102:10000/public/live-{s}.json"
-    for s in STOCK_SHARDS
+    LIVE_NAME: "http://140.245.226.102:10000/public/live.json",
 }
 
 NIFTY_URL = "http://140.245.226.102:10000/public/nifty.json"
@@ -85,7 +86,7 @@ class CP2Cycle:
 
 
 class CP2DataEngine:
-    """CP2: concurrent A-J + NIFTY ingestion using Psygrid v4 stock payloads."""
+    """CP2: concurrent full-universe + NIFTY ingestion using Psygrid v4 stock payloads."""
 
     def __init__(
         self,
@@ -93,11 +94,13 @@ class CP2DataEngine:
         nifty_url: str = NIFTY_URL,
         timeout_seconds: float = 8.0,
         stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
+        expected_stock_count: int = EXPECTED_STOCKS,
     ):
         self.endpoint_urls = dict(endpoint_urls or ENDPOINTS)
         self.nifty_url = nifty_url
         self.timeout_seconds = timeout_seconds
         self.stale_after_seconds = stale_after_seconds
+        self.expected_stock_count = expected_stock_count
         self.running = True
         self.last_cycle: CP2Cycle | None = None
 
@@ -232,10 +235,10 @@ class CP2DataEngine:
 
         endpoint.symbols = [str(symbol).upper() for symbol in stocks]
         endpoint.stock_count = len(endpoint.symbols)
-        if endpoint.stock_count != EXPECTED_STOCKS_PER_SHARD:
+        if endpoint.stock_count != self.expected_stock_count:
             endpoint.error = (
                 f"universe_count:{endpoint.stock_count}!="
-                f"{EXPECTED_STOCKS_PER_SHARD}"
+                f"{self.expected_stock_count}"
             )
 
         for raw_symbol, item in stocks.items():
@@ -282,10 +285,8 @@ class CP2DataEngine:
             endpoints[result.name] = self._endpoint(result, now)
 
         stocks = {}
-        for name in STOCK_SHARDS:
-            endpoint = endpoints.get(name)
-            if not endpoint:
-                continue
+        for name in sorted(endpoints):
+            endpoint = endpoints[name]
             for symbol, stock in endpoint.stocks.items():
                 if symbol in stocks:
                     stocks[symbol].healthy = False
@@ -300,7 +301,8 @@ class CP2DataEngine:
                     stocks[symbol] = stock
 
         self.last_cycle = CP2Cycle(
-            now, endpoints, stocks, nifty_payload, nifty_error
+            now, endpoints, stocks, nifty_payload, nifty_error,
+            expected_stock_count=self.expected_stock_count,
         )
         return self.last_cycle
 
@@ -308,13 +310,13 @@ class CP2DataEngine:
         cycle = self.last_cycle
         return {
             "engine": "RUNNING" if self.running else "STOPPED",
-            "expected_stocks": EXPECTED_STOCKS,
+            "expected_stocks": self.expected_stock_count,
             "unique_stocks": cycle.unique_stock_count if cycle else 0,
             "healthy_stocks": cycle.healthy_stock_count if cycle else 0,
             "stale_stocks": cycle.stale_stock_count if cycle else 0,
             "endpoint_failures": (
                 [k for k, v in cycle.endpoints.items() if v.error]
-                if cycle else list(STOCK_SHARDS)
+                if cycle else list(self.endpoint_urls)
             ),
             "endpoint_counts": (
                 {k: v.stock_count for k, v in cycle.endpoints.items()}
