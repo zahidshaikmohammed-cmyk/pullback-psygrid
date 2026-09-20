@@ -54,7 +54,41 @@ def make_candidate():
     )
 
 
-def test_trigger_does_not_require_nifty_regime_or_ep_threshold():
+def test_trigger_does_not_require_nifty_regime():
+    """NIFTY regime stays diagnostic-only: a disagreeing benchmark must not
+    block an otherwise-valid stock-level setup from triggering early."""
+    engine = CP4TriggerEngine()
+    stock = StockData(
+        "TEST",
+        "a",
+        make_1m([100.0, 99.0, 98.0, 105.0]),
+        [],
+        False,
+        True,
+        datetime(2026, 9, 12, 10, 3, tzinfo=IST),
+    )
+    candidate = make_candidate()
+    candles_5m = make_5m()
+
+    ep = calculate_early_entry_from_5m(candidate, candles_5m, 105.0)
+    assert ep is not None and ep <= 0.45
+    assert candidate.nifty_regime is False
+
+    signal = engine._evaluate_candidate(
+        candidate,
+        stock,
+        candles_5m,
+        3,
+        datetime(2026, 9, 12, 10, 4, tzinfo=IST),
+    )
+
+    assert signal is not None
+
+
+def test_trigger_requires_early_entry_threshold():
+    """The engine exists to catch the pullback before it finishes reversing.
+    Once price has already recovered past 45% of the way back to the impulse
+    extreme, the setup is no longer an early entry and must not trigger."""
     engine = CP4TriggerEngine()
     stock = StockData(
         "TEST",
@@ -79,7 +113,7 @@ def test_trigger_does_not_require_nifty_regime_or_ep_threshold():
         datetime(2026, 9, 12, 10, 4, tzinfo=IST),
     )
 
-    assert signal is not None
+    assert signal is None
 
 
 def test_cp2_keeps_current_stock_usable_when_one_historical_row_is_invalid():

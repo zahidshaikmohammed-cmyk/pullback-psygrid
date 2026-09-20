@@ -90,6 +90,10 @@ class CP3PullbackHunter:
     """
 
     MIN_STRUCTURAL_SCORE = 62.0
+    # A leg only counts as a "big impulse" once it is a genuinely displaced
+    # move, not just noise. 2x the ATR at the extreme is the bar; legs below
+    # this are ignored before a pullback is ever evaluated against them.
+    MIN_IMPULSE_STRENGTH = 2.0
 
     def __init__(self) -> None:
         self.running = True
@@ -126,15 +130,14 @@ class CP3PullbackHunter:
     def _adaptive_depth(impulse: Impulse) -> tuple[float, float, float]:
         """Return (minimum, ideal, maximum) retracement for this impulse.
 
-        Strong/displaced impulses normally correct less; weak impulses need a
-        deeper correction before the setup becomes structurally meaningful.
-        The bounds move continuously with impulse ATR strength instead of
-        applying one 30-80% band to every market condition.
+        The setup exists to catch a genuinely deep give-back after a big
+        impulse, not any pullback. Whether the impulse is "big" is filtered
+        separately (MIN_IMPULSE_STRENGTH) before a leg reaches this stage, so
+        the depth band stays anchored to the deep zone (50%-78.6%) instead of
+        loosening into a shallow-pullback band for strong impulses.
         """
-        strength = max(0.5, impulse.distance / max(impulse.atr_at_extreme, 1e-9))
-        ideal = max(0.42, min(0.62, 0.58 - 0.045 * (strength - 2.0)))
-        spread = max(0.12, min(0.22, 0.20 - 0.012 * max(0.0, strength - 2.0)))
-        return max(0.18, ideal - spread), ideal, min(0.82, ideal + spread)
+        del impulse  # depth requirement no longer scales with impulse strength
+        return 0.50, 0.618, 0.786
 
     @staticmethod
     def _structure_quality(
@@ -227,19 +230,20 @@ class CP3PullbackHunter:
         atrs = atr_wilder(candles, 14)
         bullish: list[Impulse] = []
         bearish: list[Impulse] = []
+        min_strength = CP3PullbackHunter.MIN_IMPULSE_STRENGTH
         for sl in lows:
             for sh in highs:
                 if sh <= sl or sh > through_index - 3 or atrs[sh] is None or not math.isfinite(atrs[sh]):
                     continue
                 d, n = candles[sh].high - candles[sl].low, sh - sl
-                if n >= 3 and d >= atrs[sh]:
+                if n >= 3 and d >= min_strength * atrs[sh]:
                     bullish.append(Impulse("LONG", sl, sh, d, atrs[sh], n, d / candles[sl].low if candles[sl].low > 0 else math.nan))
         for sh in highs:
             for sl in lows:
                 if sl <= sh or sl > through_index - 3 or atrs[sl] is None or not math.isfinite(atrs[sl]):
                     continue
                 d, n = candles[sh].high - candles[sl].low, sl - sh
-                if n >= 3 and d >= atrs[sl]:
+                if n >= 3 and d >= min_strength * atrs[sl]:
                     bearish.append(Impulse("SHORT", sh, sl, d, atrs[sl], n, d / candles[sl].low if candles[sl].low > 0 else math.nan))
         # Only the most recent confirmed directional leg is actionable. Older
         # impulses remain historical context but cannot generate new signals.

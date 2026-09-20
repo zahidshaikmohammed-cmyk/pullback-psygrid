@@ -182,9 +182,12 @@ class CP4TriggerEngine:
             return None
 
         ep = calculate_early_entry_from_5m(candidate, candles_5m, price)
-        # Early-entry remains calculated and available for diagnostics, but
-        # the former <= 0.45 threshold is no longer a hard signal veto.
-        if ep is None or not math.isfinite(ep):
+        # The whole point of the engine is to catch the setup before the
+        # pullback has finished reversing, not to chase it after price has
+        # already recovered most of the way back to the impulse extreme.
+        # ep <= 0.45 means price is still within the first 45% of that move
+        # back toward the extreme, so it is a hard trigger requirement.
+        if ep is None or not math.isfinite(ep) or ep > 0.45:
             return None
 
         signal = Signal(
