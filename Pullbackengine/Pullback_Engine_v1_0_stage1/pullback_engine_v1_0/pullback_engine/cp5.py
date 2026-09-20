@@ -112,8 +112,15 @@ class CP5ContinuousEngine:
     def format_engine_panel(cycle: Any) -> str:
         cp2 = getattr(cycle, "cp2_cycle", cycle)
         endpoints = getattr(cp2, "endpoints", {}) or {}
+        healthy = getattr(cp2, "healthy_stock_count", None)
+        if healthy is None:
+            healthy = sum(1 for s in (getattr(cp2, "stocks", {}) or {}).values() if getattr(s, "healthy", False))
+        expected = getattr(cp2, "expected_stock_count", 450)
         parts = [
-            f"EXPECTED={getattr(cp2, 'expected_stock_count', 450)}",
+            "Engine: RUNNING",
+            f"NIFTY regime data: {'UNAVAILABLE' if getattr(cp2, 'nifty_error', None) else 'AVAILABLE'}",
+            f"{healthy}/{expected} healthy",
+            f"EXPECTED={expected}",
             f"STOCKS={len(getattr(cp2, 'stocks', {}) or {})}",
         ]
         for name in sorted(endpoints):
@@ -122,9 +129,14 @@ class CP5ContinuousEngine:
 
     @staticmethod
     def format_signal_panel(cycle: Any) -> str:
+        new_signals = getattr(cycle, "new_signals", []) or []
         monitoring = getattr(cycle, "monitoring", {}) or {}
         active = [s for s in monitoring.values() if getattr(s, "active", False)]
-        lines = ["PANEL 3 — SIGNAL / MONITOR", f"Active triggered setups: {len(active)}"]
+        lines = [
+            "PANEL 3 — SIGNAL / MONITOR",
+            f"New signals this cycle: {len(new_signals)}",
+            f"Active triggered setups: {len(active)}",
+        ]
         for state in active:
             lines.append(f"{state.symbol} | {state.direction} | {state.status} | {state.setup_id}")
         return "\n".join(lines)
@@ -140,7 +152,7 @@ class CP5ContinuousEngine:
     @staticmethod
     def format_cycle_panel(report: Any) -> str:
         if report is None:
-            return "PANEL 4 — 15-MINUTE CYCLE | No report yet"
+            return "PANEL 4 — 15-MINUTE CYCLE | No report due this minute."
         f = report.funnel
         return (
             f"{report.timestamp.isoformat()} | Universe {report.universe} | "
