@@ -44,15 +44,19 @@ class CP7IntegrationEngine:
     ) -> None:
         if engine is None:
             state_path = os.environ.get("PULLBACK_ENGINE_STATE_PATH")
-            self.engine = (
-                CP5ContinuousEngine(
-                    data_engine=ResilientCP2DataEngine(),
-                    state_path=state_path,
-                )
-                if state_path
-                else CP5ContinuousEngine(
-                    data_engine=ResilientCP2DataEngine(),
-                )
+            audit_log_path = os.environ.get("PULLBACK_ENGINE_AUDIT_LOG_PATH")
+            webhook_url = os.environ.get("PULLBACK_ENGINE_ALERT_WEBHOOK_URL")
+            kwargs: dict[str, Any] = {}
+            if state_path:
+                kwargs["state_path"] = state_path
+            if audit_log_path:
+                kwargs["audit_log_path"] = audit_log_path
+            if webhook_url:
+                from .notify import build_alert_callback
+
+                kwargs["alert_callback"] = build_alert_callback(webhook_url)
+            self.engine = CP5ContinuousEngine(
+                data_engine=ResilientCP2DataEngine(), **kwargs
             )
         else:
             self.engine = engine

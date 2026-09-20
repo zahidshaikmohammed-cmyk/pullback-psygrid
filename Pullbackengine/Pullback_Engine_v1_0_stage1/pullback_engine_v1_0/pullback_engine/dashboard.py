@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import threading
 from dataclasses import dataclass, field
@@ -7,6 +8,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlsplit
 
 from .core import IST, MARKET_END, MARKET_START
 
@@ -197,6 +199,7 @@ class DashboardState:
 class _Handler(BaseHTTPRequestHandler):
     state: DashboardState
     html: str
+    access_token: str | None = None
 
     def _send(self, status: int, content_type: str, body: bytes) -> None:
         self.send_response(status)
@@ -207,13 +210,35 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _authorized(self, parsed) -> bool:
+        """Constant-time token check; a no-op when no token is configured.
+
+        Live signals/entry prices are read on this surface, so an operator
+        who sets PULLBACK_ENGINE_DASHBOARD_TOKEN must not be bypassable by a
+        request that simply omits the credential. No token configured keeps
+        today's behavior (open) rather than silently locking anyone out.
+        """
+        if not self.access_token:
+            return True
+        supplied = parse_qs(parsed.query).get("token", [None])[0]
+        if not supplied:
+            header = self.headers.get("Authorization", "")
+            if header.startswith("Bearer "):
+                supplied = header[len("Bearer "):]
+        return bool(supplied) and hmac.compare_digest(supplied, self.access_token)
+
     def do_GET(self) -> None:
-        if self.path in ("/", "/index.html"):
-            self._send(200, "text/html; charset=utf-8", self.html.encode("utf-8"))
-        elif self.path in ("/api/state", "/api/status"):
-            self._send(200, "application/json; charset=utf-8", json.dumps(self.state.snapshot(), separators=(",", ":")).encode("utf-8"))
-        elif self.path == "/health":
+        parsed = urlsplit(self.path)
+        if parsed.path == "/health":
             self._send(200, "application/json", b'{"service":"PULLBACK_ENGINE_V1_0_DASHBOARD","status":"OK"}')
+            return
+        if not self._authorized(parsed):
+            self._send(401, "application/json", b'{"error":"unauthorized"}')
+            return
+        if parsed.path in ("/", "/index.html"):
+            self._send(200, "text/html; charset=utf-8", self.html.encode("utf-8"))
+        elif parsed.path in ("/api/state", "/api/status"):
+            self._send(200, "application/json; charset=utf-8", json.dumps(self.state.snapshot(), separators=(",", ":")).encode("utf-8"))
         else:
             self._send(404, "application/json", b'{"error":"not_found"}')
 
@@ -221,7 +246,13 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
-def start_dashboard(state: DashboardState, engine_provider: Callable[[], Any] | None = None, host: str = DASHBOARD_HOST, port: int = DASHBOARD_PORT) -> ThreadingHTTPServer:
+def start_dashboard(
+    state: DashboardState,
+    engine_provider: Callable[[], Any] | None = None,
+    host: str = DASHBOARD_HOST,
+    port: int = DASHBOARD_PORT,
+    access_token: str | None = None,
+) -> ThreadingHTTPServer:
     html_path = Path(__file__).resolve().parents[1] / "dashboard.html"
     html = html_path.read_text(encoding="utf-8")
 
@@ -230,6 +261,7 @@ def start_dashboard(state: DashboardState, engine_provider: Callable[[], Any] | 
 
     Handler.state = state
     Handler.html = html
+    Handler.access_token = access_token or None
     server = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=server.serve_forever, name="pullback-dashboard", daemon=True).start()
 

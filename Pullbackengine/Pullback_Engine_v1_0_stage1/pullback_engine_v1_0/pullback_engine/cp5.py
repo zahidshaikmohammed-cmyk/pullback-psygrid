@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, time, timedelta
 from pathlib import Path
@@ -91,10 +92,20 @@ class CP5ContinuousEngine:
         state_path: str | Path = "pullback_state.json",
         worker_limit: int = 990,
         alert_callback: Callable[[Signal], None] | None = None,
+        audit_log_path: str | Path = "signals_audit.jsonl",
     ) -> None:
         self.data_engine = data_engine or CP2DataEngine()
         self.state_path = Path(state_path)
+        self.audit_log_path = Path(audit_log_path)
         self.worker_limit = max(1, min(int(worker_limit), 990))
+        # asyncio.to_thread would silently serialize the universe through
+        # Python's default executor (min(32, cpu_count+4) workers), so a
+        # 990-stock cycle would take far longer than worker_limit implies.
+        # A dedicated pool sized to worker_limit makes the configured
+        # concurrency real instead of aspirational.
+        self._executor = ThreadPoolExecutor(
+            max_workers=self.worker_limit, thread_name_prefix="cp5-worker"
+        )
         self.alert_callback = alert_callback or self._default_alert
         self.running = True
         self.worker_engines: dict[str, CP4TriggerEngine] = {}
@@ -271,6 +282,30 @@ class CP5ContinuousEngine:
             cycle_keys.add(key)
         return accepted
 
+    def _append_signal_audit(self, signal: Signal) -> None:
+        """Append an immutable record of every signal the engine ever fires.
+
+        pullback_state.json only holds *current* monitoring state and gets
+        pruned/replaced across sessions, so it is not a record of history.
+        This file is append-only and never rewritten, for post-hoc strategy
+        review and compliance: what fired, when, and at what price.
+        """
+        record = {
+            "recorded_at": datetime.now(IST).isoformat(),
+            "setup_id": signal.setup_id,
+            "symbol": signal.symbol,
+            "direction": signal.direction,
+            "signal_timestamp": self._serialize_datetime(signal.signal_timestamp),
+            "entry_price": signal.entry_price,
+            "trend_invalidation_status": signal.trend_invalidation_status,
+        }
+        try:
+            with self.audit_log_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, sort_keys=True))
+                fh.write("\n")
+        except Exception as exc:
+            self.runtime_errors.append(f"audit_log:{signal.setup_id}:{type(exc).__name__}:{exc}")
+
     def _save_state(self) -> None:
         payload = {
             "version": 1,
@@ -339,10 +374,13 @@ class CP5ContinuousEngine:
 
     async def _process_universe(self, cp2_cycle: CP2Cycle, now: datetime):
         semaphore = asyncio.Semaphore(self.worker_limit)
+        loop = asyncio.get_running_loop()
 
         async def task(symbol: str, stock: StockData):
             async with semaphore:
-                return await asyncio.to_thread(self._run_one_stock, symbol, stock, cp2_cycle, now)
+                return await loop.run_in_executor(
+                    self._executor, self._run_one_stock, symbol, stock, cp2_cycle, now
+                )
 
         jobs = [task(symbol, stock) for symbol, stock in cp2_cycle.stocks.items()]
         results = await asyncio.gather(*jobs, return_exceptions=True)
@@ -531,6 +569,7 @@ class CP5ContinuousEngine:
 
         for signal in new_signals:
             if signal.setup_id not in self.alerted_setup_ids:
+                self._append_signal_audit(signal)
                 try:
                     self.alert_callback(signal)
                 except Exception as exc:
@@ -573,6 +612,7 @@ class CP5ContinuousEngine:
             self._save_state()
         except Exception:
             pass
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def health(self) -> dict[str, Any]:
         cycle = self.last_cycle

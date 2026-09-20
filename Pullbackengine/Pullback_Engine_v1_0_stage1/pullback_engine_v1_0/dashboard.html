@@ -36,6 +36,7 @@
 </div>
 <script>
 const $=id=>document.getElementById(id);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const _token=new URLSearchParams(location.search).get('token');const _stateUrl=_token?`/api/state?token=${encodeURIComponent(_token)}`:'/api/state';
 function cls(v){return v==='RUNNING'||v==='OPEN'?'good':v==='WAITING'||v==='CLOSED'?'warn':'bad'}
 function render(d){
  $('status').textContent=d.session==='OPEN'?'MARKET OPEN':d.engine; $('status').className='pill '+(d.session==='OPEN'?'live':'');
@@ -50,6 +51,6 @@ function render(d){
  const r=d.last_report;if(r){const f=r.funnel;const vals=[['Universe',f.universe],['Price',f.price_eligible],['Data',f.valid_data],['Impulse',f.impulse],['Pullback',f.pullback],['Structure',f.structure],['Trend',f.trend],['Early',f.early_entry],['Reaccel',f.reacceleration],['SIGNALS',f.signals]];$('report').innerHTML=`<div class="muted">${new Date(r.timestamp).toLocaleTimeString()} · ${esc(r.hunter_status)}</div><div class="funnel" style="margin-top:10px">${vals.map(x=>`<div class="f"><b>${x[1]}</b><span>${x[0]}</span></div>`).join('')}</div>`}else $('report').innerHTML='<div class="empty">No report yet.</div>';
  $('events').innerHTML=d.events.length?d.events.slice(0,20).map(e=>`<div class="event"><span class="muted">${new Date(e.timestamp).toLocaleTimeString()}</span> · ${esc(e.message)}</div>`).join(''):'<div class="empty">No events yet.</div>';
 }
-async function tick(){try{const r=await fetch('/api/state',{cache:'no-store'});if(!r.ok)throw Error();render(await r.json())}catch(e){$('status').textContent='OFFLINE';$('status').className='pill';}}tick();setInterval(tick,1000);
+async function tick(){try{const r=await fetch(_stateUrl,{cache:'no-store'});if(!r.ok)throw Error();render(await r.json())}catch(e){$('status').textContent='OFFLINE';$('status').className='pill';}}tick();setInterval(tick,1000);
 </script>
 </body></html>

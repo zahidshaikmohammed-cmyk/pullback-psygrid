@@ -83,3 +83,16 @@ python run_cp8.py
 Lower-level launchers remain available for individual checkpoints. CP7 is the canonical CP5+CP6 application launcher; CP8 is the final verification gate.
 
 The current endpoint host may be unreachable from a build environment; connectivity is therefore reported by the runtime rather than falsely reported as verified.
+
+## Production configuration (`run_service.py` / systemd)
+
+All of the following are optional environment variables read by `CP7IntegrationEngine`/`run_service.py`. Unset, the engine keeps its original, fully local behavior — nothing here is required to run.
+
+| Variable | Default if unset | Effect |
+| --- | --- | --- |
+| `PULLBACK_ENGINE_STATE_PATH` | `pullback_state.json` (relative to CWD) | Where current-session monitoring/alerted-setup state persists across restarts. |
+| `PULLBACK_ENGINE_AUDIT_LOG_PATH` | `signals_audit.jsonl` (relative to CWD) | Append-only, never-rewritten JSONL record of every signal ever fired — for compliance and post-hoc strategy review. Distinct from the state file, which only reflects the current session. |
+| `PULLBACK_ENGINE_ALERT_WEBHOOK_URL` | unset (journal/bell only) | A Slack/Discord incoming-webhook URL, or any HTTPS endpoint accepting a JSON POST. Every fired signal is also delivered there in real time, in addition to the local alert. Delivery is best-effort and never blocks or fails the trading loop. |
+| `PULLBACK_ENGINE_DASHBOARD_TOKEN` | unset (dashboard is open) | Requires `?token=...` (or `Authorization: Bearer ...`) on every dashboard page/API request except `/health`. **Strongly recommended** once the dashboard port is reachable from outside localhost — unset, anyone who can reach the port sees live signals and entry prices. |
+
+Both `PULLBACK_ENGINE_STATE_PATH` and `PULLBACK_ENGINE_AUDIT_LOG_PATH` should point outside the git-managed source checkout in production (e.g. under systemd's `StateDirectory=`, as `deploy/pullback-engine.service` does) — the deploy pipeline runs `git clean -fd` on every release, which would otherwise silently delete them.

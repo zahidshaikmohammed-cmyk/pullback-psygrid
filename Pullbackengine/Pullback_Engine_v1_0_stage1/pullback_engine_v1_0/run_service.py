@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta
 
 from pullback_engine.core import IST, MARKET_END, MARKET_START
@@ -30,8 +31,17 @@ def _in_market_session(now: datetime) -> bool:
 async def main() -> None:
     dashboard_state = DashboardState()
     current_engine: list[CP7IntegrationEngine | None] = [None]
-    dashboard = start_dashboard(dashboard_state, lambda: current_engine[0])
+    dashboard_token = os.environ.get("PULLBACK_ENGINE_DASHBOARD_TOKEN")
+    dashboard = start_dashboard(
+        dashboard_state, lambda: current_engine[0], access_token=dashboard_token
+    )
     print(f"Pullback Engine dashboard listening on {dashboard.server_address}", flush=True)
+    if not dashboard_token:
+        print(
+            "Pullback Engine dashboard: PULLBACK_ENGINE_DASHBOARD_TOKEN is not set — "
+            "the dashboard is reachable by anyone who can reach this host/port.",
+            flush=True,
+        )
     while True:
         now = datetime.now(IST)
         if not _in_market_session(now):

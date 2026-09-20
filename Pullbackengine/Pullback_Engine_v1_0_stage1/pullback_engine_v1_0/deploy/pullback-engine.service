@@ -9,6 +9,16 @@ User=ubuntu
 WorkingDirectory=/home/ubuntu/PullbackEngine/Pullbackengine/Pullback_Engine_v1_0_stage1/pullback_engine_v1_0
 StateDirectory=pullback-engine
 Environment=PULLBACK_ENGINE_STATE_PATH=/var/lib/pullback-engine/pullback_state.json
+Environment=PULLBACK_ENGINE_AUDIT_LOG_PATH=/var/lib/pullback-engine/signals_audit.jsonl
+# Set this to a Slack/Discord incoming-webhook URL (or any HTTPS endpoint
+# that accepts a JSON POST) to have every fired signal delivered off-box in
+# real time, in addition to the systemd journal. Unset = journal/bell only.
+#Environment=PULLBACK_ENGINE_ALERT_WEBHOOK_URL=
+# Set this to require ?token=... (or an Authorization: Bearer header) to
+# view the dashboard. Unset = dashboard is open to anyone who can reach
+# this host:10001, which is the current default and is NOT recommended
+# for a box reachable from the public internet.
+#Environment=PULLBACK_ENGINE_DASHBOARD_TOKEN=
 ExecStart=/home/ubuntu/PullbackEngine/.venv/bin/python run_service.py
 Restart=on-failure
 RestartSec=10
